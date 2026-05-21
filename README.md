@@ -1,0 +1,2 @@
+# spkg
+Simple Package Manager
