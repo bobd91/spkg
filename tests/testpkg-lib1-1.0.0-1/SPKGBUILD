@@ -1,0 +1,22 @@
+pkgname=testpkg-lib1
+pkgver=1.0.0
+pkgrel=1
+
+sources=(
+        "testpkg-lib1-1.0.0-1.tar.gz"
+        )
+md5sums=(
+        0f9e6152c339eea42fbdfcdc9b85dc1c
+        )
+
+build() {
+        cd "$pkgname-$pkgver"
+        echo "Building $pkgname-$pkgver-$pkgrel"
+}
+
+package() {
+        echo "Installing $pkgname-$pkgver-$pkgrel"
+        cp -av usr $pkgdir
+}
+
+

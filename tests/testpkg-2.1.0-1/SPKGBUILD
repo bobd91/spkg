@@ -1,0 +1,40 @@
+pkgname=testpkg
+pkgver=2.1.0
+pkgrel=1
+
+sources=(
+        "testpkg-2.1.0-1.tar.gz"
+        )
+md5sums=(
+        d2b079dccc5819c872029be52d30e167
+        )
+
+build() {
+        cd "$pkgname-$pkgver"
+        echo "Building $pkgname-$pkgver-$pkgrel"
+}
+
+package() {
+        echo "Installing $pkgname-$pkgver-$pkgrel"
+        cp -av {usr,etc} $pkgdir
+}
+
+pre_install() {
+        echo "Pre install: $*"
+        echo "Modifying /etc/testpkg.conf prior to installation"
+        sed -i -e 's|\(.*\)|\1 - Modified|' "$sysroot/etc/testpkg.conf"
+}
+
+post_install() {
+        echo "Post install: $*"
+}
+
+pre_uninstall() {
+        echo "Pre uninstall: $*"
+}
+
+post_uninstall() {
+        echo "Post uninstall: $*"
+}
+
+

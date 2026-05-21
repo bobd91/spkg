@@ -1,0 +1,9 @@
+
+.SILENT: install
+
+install:
+	install -d $(DESTDIR)SPKG_exec_prefix
+	install -m 755 spkg $(DESTDIR)SPKG_exec_prefix
+	install -d $(DESTDIR)SPKG_prefix/etc
+	install -m 644 spkg.conf $(DESTDIR)SPKG_prefix/etc
+	install -d $(DESTDIR)SPKG_prefix/var/log/spkg

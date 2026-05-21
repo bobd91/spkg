@@ -1,0 +1,23 @@
+# Simple Package Manager
+# Build File
+
+pkgname=SPKG_name
+pkgver=SPKG_version
+pkgrel=SPKG_release
+
+sources=(SPKG_source)
+md5sums=(SPKG_md5)
+
+build() {
+        cd "$pkgname-$pkgver"
+
+        ./configure \
+                --is-spkgbuild=yes \
+                --srccache="SPKG_srccache" \
+                --installdir="SPKG_installdir"
+}
+
+package() {
+        make DESTDIR="$pkgdir" install
+}
+

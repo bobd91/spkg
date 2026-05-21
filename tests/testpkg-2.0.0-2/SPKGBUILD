@@ -1,0 +1,22 @@
+pkgname=testpkg
+pkgver=2.0.0
+pkgrel=2
+
+sources=(
+        "testpkg-2.0.0-2.tar.gz"
+        )
+md5sums=(
+        bf4571e708e317b72ca54c5585cd5c62
+        )
+
+build() {
+        cd "$pkgname-$pkgver"
+        echo "Building $pkgname-$pkgver-$pkgrel"
+}
+
+package() {
+        echo "Installing $pkgname-$pkgver-$pkgrel"
+        cp -av {usr,etc} $pkgdir
+}
+
+

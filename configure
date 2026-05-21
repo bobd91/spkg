@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+
+# This could possibly have been done better with autoconf
+# but it seems very much geared around compilation targets
+# and I couldn't find much help on this use case
+
+help() {
+        cat << EOHELP
+Simple Package Manager
+
+Configuration options (with default values):
+
+
+The following options are required when the root of the final filesystem is not mounted at /
+
+        --prefix=$prefix
+        --exec-prefix=$exec_prefix
+        --with-sysroot=$with_sysroot
+
+For example, on a Linux From Scratch build these options should be set to:
+
+        --prefix=$LFS/tools
+        --exec-prefix=$LFS/tools/bin
+        --with-sysroot=$LFS
+
+
+The following options specify the location of package build and install files and should be absolute paths on the final file system:
+
+        --srccache=$srccache
+        --installdir=$installdir
+
+Source tarballs will be cached in <srccache>.
+
+Installation files will be untarred into <installdir> and then symlinked into the final installation location.
+
+
+The following option is for when configure is being called from within an SPKGBUILD file.
+
+        --is-spkgbuild=yes
+EOHELP
+}
+
+fail() {
+        >&2 echo "$@"
+        exit 1
+}
+
+parse_args() {
+        local option value
+
+        while [ 0 != ${#@} ]; do
+                if [[ "$1" =~ --(.*)=(.*) ]]; then
+                        option=${BASH_REMATCH[1]}
+                        value=${BASH_REMATCH[2]}
+
+                        if [[ $option =~ is-spkgbuild|prefix|exec-prefix|with-sysroot|srccache|installdir ]]; then
+                                option=${option/-/_}
+                                eval "${option//-/_}=$value"
+                        else
+                                fail "Invalid option: $1"
+                        fi
+                else
+                        fail "Invalid option: $1"
+                fi
+                shift
+        done
+}
+
+validate_options() {
+        local option value builddir pkgdir
+
+        for option in prefix exec_prefix with_sysroot srccache installdir; do
+                value=${!option}
+                if [[ -n $value && ${value::1} != / ]]; then
+                        fail "${option//_/-} must be an absolute path"
+                fi
+        done
+
+        builddir="${with_sysroot}$libdir/build/$pkg-$version-$release"
+        pkgdir="${with_sysroot}libdir/pkg"
+        srcfile="${with_sysroot}$srccache/$pkg-$version.tar.gz"
+        [[ ! -e $builddir ]] || fail "Build directory already exists $builddir"
+        [[ ! -e $pkgdir ]] || fail "Package directory already exists $pkgdir"
+        [[ ! -e $installdir ]] || fail "Install directory already exists $installdir"
+        [[ -f $srcfile ]] || fail "Source tarball not found $srcfile"
+}
+
+apply_options() {
+        m4 \
+                -DSPKG_with_sysroot="$with_sysroot" \
+                -DSPKG_prefix="$prefix" \
+                spkg.in > spkg
+
+        m4 \
+                -DSPKG_srccache="$srccache" \
+                -DSPKG_installdir="$installdir" \
+                spkg.conf.in > spkg.conf
+
+        m4 \
+                -DSPKG_prefix="$prefix" \
+                -DSPKG_exec_prefix="$exec_prefix" \
+                Makefile.in > Makefile
+}
+
+init_spkgbuild() {
+        m4 \
+                -DSPKG_name=$pkg \
+                -DSPKG_version=$version \
+                -DSPKG_release=$release \
+                -DSPKG_source="$(basename "$srcfile")" \
+                -DSPKG_md5="$md5" \
+                -DSPKG_srccache="$srccache" \
+                -DSPKG_installdir="$installdir" \
+                SPKGBUILD.in > SPKGBUILD
+}
+
+init_pkg_dirs() {
+        local builddir pkgdir olddir
+
+        builddir="${with_sysroot}$libdir/build/$pkg-$version-$release"
+        pkgdir="${with_sysroot}$libdir/pkg"
+        olddir="${with_sysroot}$libdir/old"
+
+        mkdir -p "$builddir"
+        init_spkgbuild
+        cp SPKGBUILD $builddir
+        mkdir -p "$pkgdir"
+        mkdir -p "$olddir/build"
+        mkdir -p "$olddir/pkg"
+        mkdir -p "${with_sysroot}$installdir"
+}
+
+get_src_md5() {
+        local md5
+
+        md5=$(md5sum "$srcfile" 2>/dev/null)
+        if [[ -z $md5 ]]; then
+                fail "Could not calculate md5sum of $srcfile"
+        fi
+        echo "${md5%%  "$srcfile"}"
+}
+
+pkg=spkg
+version=0.0.1
+release=1
+
+is_spkgbuild=no
+
+prefix=
+exec_prefix=/usr/bin
+with_sysroot=
+
+libdir=/var/lib/spkg
+installdir=/spkg
+srccache=/sources
+
+srcfile=
+md5=
+
+if [[ $* =~ --help ]]; then
+        help
+        exit 0
+fi
+
+parse_args "$@"
+
+if [[ $is_spkgbuild = no ]]; then
+        validate_options
+        md5="$(get_src_md5)"
+        apply_options
+        init_pkg_dirs
+else
+        apply_options
+fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+

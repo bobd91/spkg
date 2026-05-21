@@ -1,0 +1,875 @@
+#!/bin/env bash
+
+# Simple Package Manager
+
+# TODO: improve spkg list (columns)
+
+# TODO: testing
+
+# TODO: lfs2spkg 
+
+set -e
+
+sysroot=SPKG_with_sysroot
+prefix=SPKG_prefix
+
+fail() {
+        >&2 echo "$@"
+        exit 1
+}
+
+info() {
+        echo "$@"
+}
+
+warn() {
+        echo "Warning:" "$@"
+}
+
+log() {
+        echo "$@" >> "$logfile"
+}
+
+pushd() {
+        builtin pushd "$@" > /dev/null
+}
+
+popd() {
+        builtin popd >/dev/null
+}
+
+source() { 
+        {
+                pushd .
+                builtin source "$@"
+                popd
+        } || fail "Failed to source $*"
+}
+
+log_rm() {
+        rm -v "$@" >> "$logfile" || fail "Failed to rm $*"
+}
+
+log_rmdir() {
+        rmdir -v --ignore-fail-on-non-empty "$@" >> $logfile ||
+                fail "Failed to rmdir $*"
+}
+
+log_mkdirpv() {
+        # displays created directories relative to $sysroot
+        {
+        mkdir -pv "$@" |
+                tee -a "$logfile" |
+                sed -e "s|.*'${sysroot}/\(.*\)'$|\1|" 
+        } || fail "Failed to mkdir -pv $*"
+}
+
+log_cp() {
+        cp -v "$@" >> "$logfile" || fail "Failed to cp $*"
+}
+
+log_cpa() {
+        cp -av --remove-destination "$@" >> "$logfile" || fail "Failed to cp -a $*"
+}
+
+has_permission() {
+        [[ -w "$installroot" ]]
+}
+
+is_fn() {
+        test "$(type -t "$1")" = function
+}
+
+call_fn() {
+        if is_fn "$1"; then
+                if ! "$@" >> "$logfile" ; then
+                        fail "Function $1 failed" 
+                fi
+        fi
+}
+
+parse_pkgspec() {
+        [[ $1 =~ ^.+-([^-]+)-[0-9]+ ]]
+}
+
+# Print location of sysroot dependent <package> tar file
+pkgtarfile() {
+        echo "$pkgroot/${1:?}-$pkgsuffix"
+}
+
+# Print location of sysroot dependent <package> <file>
+pkgrootfile() {
+        echo "$installroot/${1:?}/${2:?}"
+}
+
+# Print location of sysroot dependent <package> <meta file>
+pkgmetafile() {
+        pkgrootfile "${1:?}" ".spkg/${2:?}"
+}
+
+# Print location of sysroot dependent <installed file> 
+targetfile() {
+        echo "$sysroot/${1:?}"
+}
+
+# Print location of <package> <file> in final, no sysroot, system
+# Used as link target for installed files
+finalpkgfile() {
+        echo "$installdir/${1:?}/${2:?}"
+}
+
+pkgfiles() {
+        shopt -s nullglob
+        files=( "$1"-[0-9][0-9\.-]* )
+        shopt -u nullglob
+        echo "${files[@]}"
+}
+
+# Print package spec of installed version of <package name>
+installed_pkg() {
+        local ipath ipaths
+
+        ipaths=( $(pkgfiles "$installroot/$1") )
+        ipath="${ipaths[0]}"
+
+        if [[ -n $ipath ]]; then
+                echo "${ipath##*/}"
+        fi
+}
+
+# Success if <package spec> is installed
+# Package spec may be 
+is_installed() {
+        local pkg
+
+        pkg=${1}
+        [[ $pkg == "$(installed_pkg "${pkg%-*-*}")" ]]
+}
+
+# Print package specs that match args sorted by name and version number
+# If first argument is '-r' then reverse sort
+versort() {
+        local args
+
+        # Using output of ls in scripts is problematic but we want to use version sorting
+        # And package names shouldn't contain newlines and other odd characters
+        args='-bdv'
+        if [[ $1 == '-r' ]]; then
+                args+='r'
+                shift
+        fi
+
+        ls "$args" "$@" 2>/dev/null
+}
+
+# Print package spec the <package name> with the highest version number
+latest_pkg() {
+        local pkg tars
+
+        pkg=${1:?}
+        # Extract package spec from full path listing of tar files
+        # Latest version will be sorted to the bottom
+
+        tars=( $(pkgfiles "$pkgroot/$pkg") )
+
+        if (( ${#tars[@]} )); then
+                versort "${tars[@]}" | 
+                        sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" | 
+                        tail -n 1
+        fi
+}
+
+confirm () {
+        read -p "$1" -n 1 -r
+        echo
+        [[ ${REPLY,,} =~ ^(|"$2")$ ]]
+}
+
+confirm_pkgs() {
+        local prompt def
+
+        prompt=${1:?}
+        def=${2:?}
+        shift 2
+
+        printf "Selected packages:\n\n"
+        printf "%s\n\n" "$*"
+        confirm "$prompt" "$def"
+}
+
+# Install package files for <package spec> as symlinks back to the installdir
+# Taking note of the LFS Book's warnings about upgrading glibc this uses
+# a one-shot install mechanism
+# There is no recursive mode for ln so create links in temp root and
+# install with cp -a
+# Pre-chroot the links will be broken but will be ok once chrooted
+install_pkgfiles() {
+        local pkg root d f
+
+        pkg=${1:?}
+        root="$installroot/$pkg/tmproot"
+        mkdir "$root"
+
+        while IFS= read -r d; do
+                mkdir "$root/$d"
+        done < "$(pkgmetafile "$pkg" 'reqdirs')"
+        while IFS= read -r f; do
+                ln -s "$(finalpkgfile "$pkg" "$f")" "$root/$f"
+        done < "$(pkgmetafile "$pkg" 'pkgfiles')"
+
+        log_cpa "$root/"* "${sysroot:-/}"
+
+        rm -r "$root"
+}
+
+# Uninstall package files for <package spec> if they still link to the
+# package being uninstalled.  
+uninstall_pkgfiles() {
+        local pkg f tgt
+
+        pkg=${1:?}
+        while IFS= read -r f; do
+                tgt="$(targetfile "$f")"
+                if [[ "$(readlink "$tgt")" == "$(finalpkgfile "$pkg" "$f")" ]]; then
+                        log_rm "$tgt"
+                fi
+        done < "$(pkgmetafile "$pkg" 'pkgfiles')"
+}
+
+# Ensure required dirs are created and capture any actually created for
+# potential removal when package is uninstalled
+# When replacing packages retain any dirs in replaced pkgdirs files
+# as these dirs cannot be removed as the new package will be in place
+install_reqdirs() {
+        local npkg opkg d pkgdirs tmpdirs
+
+        npkg=${1:?}
+        pkgdirs="$(pkgmetafile "$npkg" 'pkgdirs')"
+        tmpdirs="$(pkgmetafile "$npkg" 'tmpdirs')"
+
+        while IFS= read -r d; do
+                log_mkdirpv "$(targetfile "$d")"
+        done \
+                < "$(pkgmetafile "$npkg" 'reqdirs')" \
+                > "$pkgdirs"
+
+        shift
+        for opkg; do
+                mv "$pkgdirs" "$tmpdirs"
+                cat "$tmpdirs" \
+                    "$(pkgmetafile "$opkg" 'pkgdirs')" |
+                    uniq > "$pkgdirs"
+        done
+}
+
+# Only call if this is a real uninstall rather than an upgrade
+# Uninstall any directories that this <package spec>
+# created when installed and are now empty
+uninstall_pkgdirs() {
+        local d pkg
+
+        pkg=${1:?}
+        # Remove in reverse order, for example a/b before a
+        for d in $(tac "$(pkgmetafile "$pkg" 'pkgdirs')"); do
+                log_rmdir "$(targetfile "$d")"
+        done
+}
+
+# Install user files for <package spec>, 
+# <other package specs..> are being uninstalled
+install_userfile() {
+        local f npkg opkg nfile ufile ofile 
+
+        f=${1:?}
+        npkg=${2:?}
+        shift 2
+
+        nfile="$(pkgrootfile "$npkg" "$f")"
+        ufile="$(targetfile "$f")"
+
+        # If user file does not exist, copy in new one
+        if [[ ! -f "$ufile" ]]; then
+                log_cp "$nfile" "$ufile"
+                return
+        fi
+
+        # If new file = user file, no change required
+        if cmp -s "$nfile" "$ufile"; then
+                return
+        fi
+
+        # Look for previous installed version of file
+        # If new file = old file, leave the user file in place 
+        # If user file = old file, replace with new file
+        for opkg ; do
+                ofile="$(pkgrootfile "$opkg" "$f")"
+                if [[ -e $ofile ]]; then
+                        if cmp -s "$nfile" "$ofile"; then
+                                return
+                        fi
+                        if cmp -s "$ufile" "$ofile"; then
+                                log_cp "$nfile" "$ufile"
+                                return
+                        fi
+                fi
+        done
+
+        # We have a clash so copy in the new file with .spkgnew suffix 
+        log_cp "$nfile" "$(targetfile "$f.spkgnew")"
+}
+
+install_userfiles() {
+        local npkg f
+
+        npkg=${1:?}
+        shift
+        while IFS= read -r f; do
+                install_userfile "$f" "$npkg" "$@"
+        done < "$(pkgmetafile "$npkg" 'userfiles')"
+}
+
+# Only call if this is real uninstall rather than upgrade
+# Uninstalling <package spec>, remove userfile if unchanged since installation
+uninstall_userfile() {
+        local f pkg
+
+        f=${1:?}
+        pkg=${2:?}
+        if cmp -s "$(pkgrootfile "$pkg" "$f")" "$(targetfile "$f")"; then
+                log_rm "$(targetfile "$f")"
+        fi
+}
+
+# Only call if this is real uninstall rather than upgrade
+uninstall_userfiles() {
+        local pkg f
+
+        pkg=${1:?}
+        while IFS= read -r f; do
+                uninstall_userfile "$f" "$pkg"
+        done < "$(pkgmetafile "$pkg" 'userfiles')"
+}
+
+pre_install_pkg() {
+        local npkg
+        # shellcheck disable=SC2034 # maybe defined in sourced file
+        local pre_install post_install pre_uninstall post_uninstall
+
+        npkg=${1:?}
+
+        tar xaf "$(pkgtarfile "$npkg")" -C "$installroot"
+
+        # shellcheck disable=SC1090 # package supplied file
+        source "$(pkgmetafile "$npkg" 'upgradefns')"
+
+        call_fn pre_install "$@"
+}
+
+post_install_pkg() {
+        local npkg
+        # shellcheck disable=SC2034 # maybe defined in sourced file
+        local pre_install post_install pre_uninstall post_uninstall
+
+        npkg=${1:?}
+
+        # shellcheck disable=SC1090 # package supplied file
+        source "$(pkgmetafile "$npkg" 'upgradefns')"
+
+        call_fn post_install "$@"
+}
+
+pre_uninstall_pkg() {
+        local opkg npkg
+        # shellcheck disable=SC2034 # maybe defined in sourced file
+        local pre_install post_install pre_uninstall post_uninstall
+
+        opkg=${1:?}
+        npkg=$2
+
+        # shellcheck disable=SC1090 # package supplied file
+        source "$(pkgmetafile "$opkg" 'upgradefns')"
+
+        call_fn pre_uninstall "$opkg" "$npkg"
+}
+
+post_uninstall_pkg() {
+        local opkg npkg
+        # shellcheck disable=SC2034 # maybe defined in sourced file
+        local pre_install post_install pre_uninstall post_uninstall
+
+        opkg=${1:?}
+        npkg=$2
+
+        # shellcheck disable=SC1090 # package supplied file
+        source "$(pkgmetafile "$opkg" 'upgradefns')"
+
+        call_fn post_uninstall "$opkg" "$npkg"
+
+        # Remove installed package directory
+        rm -r "${installroot:?}/$opkg"
+
+        # Move build and package files to old 
+        mv "$(pkgtarfile "$opkg")" "$oldroot/pkg"
+        mv "$buildroot/$opkg" "$oldroot/build"
+}
+
+# Install <package spec>, 
+# <package specs being replaced ...> are needed for correct handling of userfiles
+install_pkg() {
+        local npkg
+
+        npkg=${1:?}
+
+        install_reqdirs "$@"
+        install_pkgfiles "$npkg"
+        install_userfiles "$@"
+}
+
+# Uninstall <package spec>, optional <package spec> of package that is replacing it
+# Only uninstall userfiles and pkgdirs if package is not being replaced
+uninstall_pkg() {
+        local opkg npkg
+
+        opkg=${1:?}
+        npkg=$2
+
+        uninstall_pkgfiles "$opkg" "$npkg"
+
+        if [[ -z $npkg ]]; then
+                uninstall_userfiles "$opkg"
+                uninstall_pkgdirs "$opkg"
+        fi
+}
+
+# Options:
+#   -c run test checks after build
+#   -b build only (don't package files)
+#   -p package previously built files to package repository
+# Args: single package spec
+build_command() {
+        local opt opt_check opt_build_only opt_package_only
+        local pkg pkgdir builddir pkgfile i srcdir src md5 url
+        # declare variables that should be set by $buildfile
+        declare -a sources md5sums userfiles replaces
+        local pkgname pkgver pkgrel 
+        # shellcheck disable=SC2034 # maybe defined in $buildfile
+        local build check package 
+        # shellcheck disable=SC2034 # maybe defined in $buildfile
+        local pre_install post_install pre_uninstall post_uninstall
+
+        while getopts ":cbp" opt; do
+                case $opt in
+                        c ) opt_check=1 ;; 
+                        b ) opt_build_only=1 ;;
+                        p ) opt_package_only=1 ;;
+                        * ) fail "Invalid option: $OPTARG" ;;
+                esac
+        done
+        shift $((OPTIND - 1))
+
+        if [[ ( -n $opt_build_only || -n $opt_check ) && -n $opt_package_only ]]; then
+                fail "Cannot use option -p with -b or -c"
+        fi
+
+        pkg=$1
+        parse_pkgspec "$pkg" || fail "Invalid package name $pkg"
+
+        builddir=$buildroot/$pkg
+        pkgfile=$(pkgtarfile "$pkg")
+        srcdir=$builddir/src
+        pkgdir=$builddir/pkg/$pkg
+
+        [[ ! -f $pkgfile ]] || fail "Package already exists $pkgfile"
+        [[ -d $builddir ]] || fail "Missing build directory $builddir"
+        [[ -f $builddir/$buildfile ]] || fail "Missing $buildfile in build directory $builddir"
+
+        cd "$builddir"
+        
+        # defaults, can be added to or overridden by $buildfile
+        userfiles=("/etc/*")
+        replaces=("${pkg%-*-*}")
+
+        # shellcheck disable=SC1090 # package supplied build file
+        source "$buildfile"
+
+        [[ "$pkg" == "$pkgname-$pkgver-$pkgrel" ]] || fail "Build is not for $pkg"
+
+        if [[ -z $opt_package_only ]]; then
+
+                (( ${#sources[@]} == "${#md5sums[@]}" )) || fail "Unexpected number of md5sums $pkg" 
+
+                [[ -d src ]] && rm -rf src
+                [[ -d pkg ]] && rm -rf pkg
+
+                mkdir src
+                mkdir -p "pkg/$pkg"
+
+                for i in "${!sources[@]}"; do
+                        src=${sources[$i]}
+                        md5=${md5sums[$i]}
+                        if [[ $src =~ ^https:// ]]; then
+                                url=$src
+                                src=$srcroot/${url##*/}
+                                if [[ ! -f "$src" ]]; then
+                                        if command -v curl; then
+                                                curl -O --output-dir "$srcroot" "$url"
+                                        elif command -v wget; then
+                                                wget -P "$srcroot" "$url"
+                                        fi
+                                fi
+                        elif [[ $src =~ ^/ ]]; then
+                                src=${sysroot}$src
+                        else
+                                src=$srcroot/$src
+                        fi
+
+                        [[ -f $src ]] || fail "Source not found $src"
+                        [[ $(md5sum "$src") == "$md5  $src" ]] || fail "Incorrect md5sum for $src"  
+
+                        # only untar the first source file
+                        if (( i )) || ! tar xaf "$src" -C src 2>/dev/null; then
+                                cp -r "$src" src
+                        fi
+                done
+
+                cd "$srcdir"
+                call_fn build
+                if [[ -n $opt_check ]]; then
+                        call_fn check
+                fi
+                call_fn package
+        else
+                if [[ ! ( -d $srcdir && -d $pkgdir ) ]]; then
+                        fail "Cannot add package, package not built"
+                fi
+        fi
+
+        if [[ -z $opt_build_only ]]; then
+                cd "$pkgdir"
+
+                mkdir .spkg
+
+                {
+                        for fn in pre_install post_install pre_uninstall post_uninstall; do
+                                type $fn 2> /dev/null | tail -n +2
+                        done
+                } > .spkg/upgradefns
+
+                {
+                        for f in "${userfiles[@]}"; do
+                                [[ ${f::1} == / ]] || fail "Userfiles must be absolute paths"
+                                find . -path ".$f" -type f -printf "%P\n"
+                        done
+                } > .spkg/userfiles
+
+                # turn on dotglob so we get ALL files and dirs
+                shopt -s dotglob
+                find -- * -name .spkg -prune -o -type f -print |
+                        grep -vxFf .spkg/userfiles > .spkg/pkgfiles
+                find -- * -name .spkg -prune -o -type d -print > .spkg/reqdirs
+                shopt -u dotglob
+                
+                touch .spkg/pkgdirs
+                printf '%s\n' "${replaces[@]}" > .spkg/replaces
+
+                cd "$builddir"
+
+                tar caf "$pkgfile" -C "$builddir/pkg" "$pkg"
+
+                rm -rf src pkg
+
+                info "Package added $pkg"
+        else
+                info "Package built $pkg"
+        fi
+}
+
+# Print package specs of packages that install of <package spec> should remove
+pkg_replaces() {
+        local pkg rep
+
+        pkg=${1:?}
+
+        # we need to look at .spkg/replaces file before installing
+        while read -r rep; do
+                installed_pkg "$rep"
+        done < <(tar xOf "$(pkgtarfile "$pkg")" "$pkg/.spkg/replaces")
+
+}
+
+# Install <package spec> (already checked package exists and is not installed)
+# Uninstalls any installed packages that are being replaced
+install_pkg_command() {
+        local opkgs npkg
+
+        npkg=${1:?}
+        mapfile -t opkgs < <(pkg_replaces "$npkg")
+
+        pre_install_pkg "$npkg" "${opkgs[@]}"
+        install_pkg "$npkg" "${opkgs[@]}"
+        post_install_pkg "$npkg" "${opkgs[@]}"
+
+        for opkg in "${opkgs[@]}"; do
+                pre_uninstall_pkg "$opkg" "$npkg"
+                uninstall_pkg "$opkg" "$npkg"
+                post_uninstall_pkg "$opkg" "$npkg"
+        done
+}
+
+install_command() {
+        declare -a pkgs
+        local p n f opt_yes
+
+        has_permission || fail "You do not have sufficient privilege to install packages" 
+
+        if [[ $1 == "-y" ]]; then
+                opt_yes=1
+                shift
+        fi
+        [[ ${1::1} != "-" ]] || fail "Invalid option to install $1"
+
+        cd "$pkgroot"
+
+        if [[ $# == 0 ]]; then
+                # Reverse sort by name and version, take first (most recent version)
+                # for each package name, ignoring any that are already installed
+                f=''
+                # shellcheck disable=SC2035 # this does what is required
+                for p in $(versort -r *-$pkgsuffix); do
+                        p=${p%-"$pkgsuffix"}
+                        n=${p%-*-*}
+                        if [[ $f != "$n" ]]; then
+                                f=$n
+                                if ! is_installed "$p"; then
+                                        pkgs+=("$p")
+                                fi
+                        fi
+                done
+
+        else
+                for p; do
+                        if parse_pkgspec "$p"; then
+                                if is_installed "$p"; then
+                                        fail "Package is already installed $p"
+                                fi
+                                pkgs+=("$p")
+                        else
+                                p=$(latest_pkg "$p")
+                                if [[ -n $p ]] && ! is_installed "$p"; then
+                                        pkgs+=("$p")
+                                fi
+                        fi
+                done
+        fi
+
+        if (( ! ${#pkgs[@]} )); then
+                info "No packages to upgrade/install"
+        elif [[ -n $opt_yes ]] ||
+                        confirm_pkgs "Install [Y/n]? " "y" "${pkgs[@]}"; then
+                for p in "${pkgs[@]}"; do
+                        info "Installing $p"
+                        install_pkg_command "$p"
+                done
+                info "${#pkgs[@]} packages upgraded/installed"
+        fi
+}
+
+uninstall_pkg_command() {
+        local pkg
+
+        pkg=$1
+        pre_uninstall_pkg "$pkg"
+        uninstall_pkg "$pkg"
+        post_uninstall_pkg "$pkg"
+}
+
+uninstall_command() {
+        declare -a pkgs
+        local p opt_yes
+
+        has_permission || fail "You do not have sufficient privilege to uninstall packages" 
+
+        if [[ $1 == '-y' ]]; then
+                opt_yes=1
+                shift
+        fi
+        [[ ${1::1} != "-" ]] || fail "Invalid option to uninstall $1"
+
+        for p; do
+                if parse_pkgspec "$p"; then
+                        if is_installed "$p"; then
+                                pkgs+=("$p")
+                        else
+                                fail "Package is not installed $pkg"
+                        fi
+                else 
+                        p=$(find $installroot -name "$p-*" -print | head -n 1)
+                        if [[ -n $p ]]; then
+                                pkgs+=( "${p##*/}" )
+                        fi
+                fi
+        done
+
+        if [[ ${#pkgs[@]} == 0 ]]; then
+                info 'No packages to uninstall'
+        elif [[ -n $opt_yes ]] ||
+                        confirm_pkgs 'Uninstall [Y/n]? ' 'y' "${pkgs[@]}"; then
+                for p in "${pkgs[@]}"; do
+                        info "Uninstalling $p"
+                        uninstall_pkg_command "$p"
+                done
+                info "${#pkgs[@]} packages uninstalled"
+        fi
+}
+
+list_dir_command() {
+        local pkg m
+
+        cd "$buildroot"
+
+        for pkg in $(versort "$1"* 2>/dev/null); do
+                if [[ -f $pkgroot/$pkg-$pkgsuffix ]]; then
+                        if is_installed "$pkg"; then
+                                m='*'
+                        else
+                                m='+'
+                        fi
+                else
+                        m=' '
+                fi
+
+                printf '%s %s\n' "$m" "$pkg"
+        done
+}
+
+list_pkg_command() {
+        local pkg m
+
+        cd "$pkgroot"
+
+        for pkg in $(versort "$1"*"-$pkgsuffix" 2>/dev/null); do
+                pkg=${pkg%-"$pkgsuffix"}
+
+                if is_installed "$pkg"; then
+                        m="*"
+                else
+                        m=" "
+                fi
+
+                printf "%s %s\n" "$m" "$pkg"
+        done
+}
+
+list_command() {
+        if [[ $1 == -d ]]; then
+                shift
+                list_dir_command "$@"
+        elif [[ ${1::1} == '-' ]]; then
+                fail "Invalid option to list $1"
+        else
+                list_pkg_command "$@"
+        fi
+}
+
+usage() {
+        echo "Usage: $(basename "$0") command arg"
+        echo "       $(basename "$0") --help"
+}
+
+help() {
+        cat << EOF
+Simple Package Manager
+
+A package spec is made up of <package name>-<version>-<release>
+
+Usage: $(basename "$0") [command] [options] [args]
+
+Command: build
+Options: -c = run check function (default is to skip checks)
+         -b = build but do not create package
+         -p = if alreay built, create package
+Args: Package spec
+
+Uses $buildroot/<package spec>/$buildfile to create the package.
+Once built the install files are tarred and added to the package repository as $pkgroot/<package spec>.$pkgsuffix
+
+
+Command: install
+Options: -y = do not prompt for confirmation to install
+Args: Zero or more package names or specs
+
+Installs one or more packages.  Previously installed versions will be uninstalled prior to installation.
+
+A package name will match the spec with the highest built version number, if that spec is not currently installed.    
+A package spec must match a package that is not currently installed.
+With no arguments the package names of all available packages will be used.
+
+
+Command: uninstall
+Options: -y = do not prompt for confirmation to uninstall
+Args: One or more package names or specs
+
+Uninstalls one or more packages.
+
+A package name will match the currently installed version.
+A package spec must match the currently installed version.
+
+
+Command: list
+Options: -d = list build directories rather than packages
+Args: Zero or one partial or full package spec
+
+Displays a list of all package specs that match the partial spec (as regex partial*).
+Installed packages will be prefixed by an asterisk, others a space.
+
+If option -d is specified build directories will be searched for package specs to list.
+Build directories that have not been built will be prefixed by ' ', those that have by '+' or '*' if the built package is installed.
+
+
+Command: <no command>
+Options: -v or --version = Display the current version number
+         -h or --help = Display this help text
+EOF
+}
+
+run_command() {
+        cmd=$1
+        (( $# == 0 )) || shift
+        case "$cmd" in
+                build )          build_command "$@" ;;
+                install )        install_command "$@" ;;
+                uninstall )      uninstall_command "$@" ;;
+                list )           list_command "$@" ;;
+                -v|--version )   info "$(basename "$0") $version" ;;
+                -h|--help|help ) help ;;
+                "" )             usage ;;
+                * )              fail "Invalid command: $cmd" ;;
+        esac
+}
+
+version=0.0.1
+
+libdir=/var/lib/spkg
+installdir=/spkg
+srccache=/sources
+pkgsuffix="x86_64.spkg.tar.gz"
+
+if [[ -f "$prefix/etc/spkg.conf" ]]; then
+        # shellcheck disable=SC1091 # configuration file
+        source "$prefix/etc/spkg.conf"
+fi
+
+libroot=${sysroot}$libdir
+pkgroot=$libroot/pkg
+oldroot=$libroot/old
+buildroot=$libroot/build
+buildfile=SPKGBUILD
+
+installroot=${sysroot}$installdir
+srcroot=${sysroot}$srccache
+
+logfile=${sysroot}/var/log/spkg/spkg.log
+command mkdir -p "$(dirname "$logfile")"
+printf "%s %s\n" spkg "$*" > "$logfile"  
+
+run_command "$@"
