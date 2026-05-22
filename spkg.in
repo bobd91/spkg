@@ -120,7 +120,7 @@ finalpkgfile() {
 
 pkgfiles() {
         shopt -s nullglob
-        files=( "$1"-[0-9][0-9\.-]* )
+        files=( "${1:?}"-[0-9][0-9\.-]* )
         shopt -u nullglob
         echo "${files[@]}"
 }
@@ -129,21 +129,17 @@ pkgfiles() {
 installed_pkg() {
         local ipath ipaths
 
-        ipaths=( $(pkgfiles "$installroot/$1") )
+        ipaths=( $(pkgfiles "$installroot/${1:?}") )
         ipath="${ipaths[0]}"
 
-        if [[ -n $ipath ]]; then
+        if [[ $ipath ]]; then
                 echo "${ipath##*/}"
         fi
 }
 
 # Success if <package spec> is installed
-# Package spec may be 
 is_installed() {
-        local pkg
-
-        pkg=${1}
-        [[ $pkg == "$(installed_pkg "${pkg%-*-*}")" ]]
+        [[ -d "$installroot/${1:?}" ]]
 }
 
 # Print package specs that match args sorted by name and version number
@@ -435,7 +431,7 @@ uninstall_pkg() {
 
         uninstall_pkgfiles "$opkg" "$npkg"
 
-        if [[ -z $npkg ]]; then
+        if [[ ! $npkg ]]; then
                 uninstall_userfiles "$opkg"
                 uninstall_pkgdirs "$opkg"
         fi
@@ -465,9 +461,9 @@ build_command() {
                         * ) fail "Invalid option: $OPTARG" ;;
                 esac
         done
-        shift $((OPTIND - 1))
+        shift $(( OPTIND - 1 ))
 
-        if [[ ( -n $opt_build_only || -n $opt_check ) && -n $opt_package_only ]]; then
+        if [[ ( $opt_build_only || $opt_check ) && $opt_package_only ]]; then
                 fail "Cannot use option -p with -b or -c"
         fi
 
@@ -494,7 +490,7 @@ build_command() {
 
         [[ "$pkg" == "$pkgname-$pkgver-$pkgrel" ]] || fail "Build is not for $pkg"
 
-        if [[ -z $opt_package_only ]]; then
+        if [[ ! $opt_package_only ]]; then
 
                 (( ${#sources[@]} == "${#md5sums[@]}" )) || fail "Unexpected number of md5sums $pkg" 
 
@@ -534,7 +530,7 @@ build_command() {
 
                 cd "$srcdir"
                 call_fn build
-                if [[ -n $opt_check ]]; then
+                if [[ $opt_check ]]; then
                         call_fn check
                 fi
                 call_fn package
@@ -544,8 +540,15 @@ build_command() {
                 fi
         fi
 
-        if [[ -z $opt_build_only ]]; then
+        if [[ ! $opt_build_only ]]; then
                 cd "$pkgdir"
+
+                # sanity check, symlinks must not point back into spkg directories
+                while IFS= read -r -d '' link; do
+                        if [[ $(readlink "$link") =~ "$libdir" ]]; then
+                                fail "Cannot package: '${link#$pkgdir/}' is a symlink into $libdir"
+                        fi
+                done < <(find "$pkgdir" -type l -print0)
 
                 mkdir .spkg
 
@@ -557,7 +560,7 @@ build_command() {
 
                 {
                         for f in "${userfiles[@]}"; do
-                                [[ ${f::1} == / ]] || fail "Userfiles must be absolute paths"
+                                [[ ${f::1} == '/' ]] || fail "Userfiles must be absolute paths"
                                 find . -path ".$f" -type f -printf "%P\n"
                         done
                 } > .spkg/userfiles
@@ -618,19 +621,22 @@ install_pkg_command() {
 
 install_command() {
         declare -a pkgs
-        local p n f opt_yes
+        local p n f opt_yes opt_force
 
         has_permission || fail "You do not have sufficient privilege to install packages" 
 
-        if [[ $1 == "-y" ]]; then
-                opt_yes=1
-                shift
-        fi
-        [[ ${1::1} != "-" ]] || fail "Invalid option to install $1"
+        while getopts ":fy" opt; do
+                case $opt in
+                        f ) opt_force=1 ;; 
+                        y ) opt_yes=1 ;;
+                        * ) fail "Invalid option: $OPTARG" ;;
+                esac
+        done
+        shift $(( OPTIND - 1 ))
 
         cd "$pkgroot"
 
-        if [[ $# == 0 ]]; then
+        if (( $# == 0 )); then
                 # Reverse sort by name and version, take first (most recent version)
                 # for each package name, ignoring any that are already installed
                 f=''
@@ -650,21 +656,28 @@ install_command() {
                 for p; do
                         if parse_pkgspec "$p"; then
                                 if is_installed "$p"; then
-                                        fail "Package is already installed $p"
+                                        if [[ $opt_force ]]; then
+                                                # forceable reinstall
+                                                # no idea of the state things are in
+                                                # so remove package installdir and try again
+                                                rm -r "$installroot/$p"
+                                        else
+                                                fail "Package $p is already installed, use install -f to force reinstall"
+                                        fi
                                 fi
                                 pkgs+=("$p")
                         else
                                 p=$(latest_pkg "$p")
-                                if [[ -n $p ]] && ! is_installed "$p"; then
+                                if [[ $p ]] && ! is_installed "$p"; then
                                         pkgs+=("$p")
                                 fi
                         fi
                 done
         fi
 
-        if (( ! ${#pkgs[@]} )); then
+        if (( ${#pkgs[@]} == 0 )); then
                 info "No packages to upgrade/install"
-        elif [[ -n $opt_yes ]] ||
+        elif [[ $opt_yes ]] ||
                         confirm_pkgs "Install [Y/n]? " "y" "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
                         info "Installing $p"
@@ -689,11 +702,13 @@ uninstall_command() {
 
         has_permission || fail "You do not have sufficient privilege to uninstall packages" 
 
-        if [[ $1 == '-y' ]]; then
-                opt_yes=1
-                shift
-        fi
-        [[ ${1::1} != "-" ]] || fail "Invalid option to uninstall $1"
+        while getopts ":y" opt; do
+                case $opt in
+                        y ) opt_yes=1 ;;
+                        * ) fail "Invalid option: $OPTARG" ;;
+                esac
+        done
+        shift $(( OPTIND - 1 ))
 
         for p; do
                 if parse_pkgspec "$p"; then
@@ -703,16 +718,17 @@ uninstall_command() {
                                 fail "Package is not installed $pkg"
                         fi
                 else 
-                        p=$(find $installroot -name "$p-*" -print | head -n 1)
-                        if [[ -n $p ]]; then
+                        # should only ever be 0 or 1
+                        read -r -d '' p < <(find $installroot -name "$p-*" -print0)
+                        if [[ $p ]]; then
                                 pkgs+=( "${p##*/}" )
                         fi
                 fi
         done
 
-        if [[ ${#pkgs[@]} == 0 ]]; then
+        if (( ${#pkgs[@]} == 0 )); then
                 info 'No packages to uninstall'
-        elif [[ -n $opt_yes ]] ||
+        elif [[ $opt_yes ]] ||
                         confirm_pkgs 'Uninstall [Y/n]? ' 'y' "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
                         info "Uninstalling $p"
@@ -761,11 +777,18 @@ list_pkg_command() {
 }
 
 list_command() {
-        if [[ $1 == -d ]]; then
-                shift
+        local opt_dir
+        
+        while getopts ":d" opt; do
+                case $opt in
+                        d ) opt_dir=1 ;;
+                        * ) fail "Invalid option: $OPTARG" ;;
+                esac
+        done
+        shift $(( OPTIND - 1 ))
+
+        if [[ $opt_dir ]]; then
                 list_dir_command "$@"
-        elif [[ ${1::1} == '-' ]]; then
-                fail "Invalid option to list $1"
         else
                 list_pkg_command "$@"
         fi
@@ -796,12 +819,13 @@ Once built the install files are tarred and added to the package repository as $
 
 Command: install
 Options: -y = do not prompt for confirmation to install
+         -f = force reinstallation of package
 Args: Zero or more package names or specs
 
 Installs one or more packages.  Previously installed versions will be uninstalled prior to installation.
 
 A package name will match the spec with the highest built version number, if that spec is not currently installed.    
-A package spec must match a package that is not currently installed.
+A package spec must match a package that is not currently installed (unless option -f is given).
 With no arguments the package names of all available packages will be used.
 
 

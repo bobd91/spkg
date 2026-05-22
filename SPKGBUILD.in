@@ -19,5 +19,14 @@ build() {
 
 package() {
         make DESTDIR="$pkgdir" install
+
+        # spkg bash completion
+        # Move to bash completions if installed, otherwise leave in /usr/share/
+        if [[ -d $sysroot/usr/share/bash-completion/completions ]]; then
+                mkdir -p "$pkgdir/usr/share/bash-completion/conpletions"
+                mv "$pkgdir/usr/share/spkg/spkg.bash" \
+                   "$pkgdir/usr/share/bash-completion/completions/spkg"
+                rmdir "$pkgdir/usr/share/spkg"
+        fi
 }
 

@@ -9,8 +9,8 @@ _spkg_completions() {
         elif (( COMP_CWORD > 1 )); then 
                 if [[ ${COMP_WORDS[COMP_CWORD]::1} == '-' ]]; then
                         case ${COMP_WORDS[1]} in
-                                build ) opts=( '-b' '-c' '-p' ) ;;
-                                install ) opts=( '-y' ) ;;
+                                build ) opts=( '-b' '-c' '-p' '-bc') ;;
+                                install ) opts=( '-y' '-f' '-fy' '-yf') ;;
                                 uninstall ) opts=( '-y' ) ;;
                                 list ) opts=( '-d' ) ;;
                                 * ) opts=() ;;
@@ -18,7 +18,15 @@ _spkg_completions() {
                 else
                         case ${COMP_WORDS[1]} in
                                 build ) opts=( $(spkg list -d | grep '^ ' | sed 's|^..||' ) ) ;;
-                                install ) opts=( $(spkg list | grep '^ ' | sed 's|^..||' ) ) ;;
+                                install ) 
+                                        g='^ '
+                                        for (( i = 2 ; i < COMP_CWORD ; i++ )); do
+                                                if [[ ${COMP_WORDS[i]} =~ 'f' ]]; then
+                                                        g='^*'
+                                                        break
+                                                fi
+                                        done
+                                        opts=( $(spkg list | grep "$g" | sed 's|^..||' ) ) ;;
                                 uninstall ) opts=( $(spkg list | grep '^*' | sed 's|^..||' ) ) ;;
                                 * ) opts=() ;;
                         esac
