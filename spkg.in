@@ -55,21 +55,16 @@ log_rmdir() {
                 fail "Failed to rmdir $*"
 }
 
-log_mkdirpv() {
-        # displays created directories relative to $sysroot
-        {
-        mkdir -pv "$@" |
-                tee -a "$logfile" |
-                sed -e "s|.*'${sysroot}/\(.*\)'$|\1|" 
-        } || fail "Failed to mkdir -pv $*"
-}
-
 log_cp() {
         cp -v "$@" >> "$logfile" || fail "Failed to cp $*"
 }
 
-log_cpa() {
-        cp -av --remove-destination "$@" >> "$logfile" || fail "Failed to cp -a $*"
+log_mkdir_m() {
+        mkdir -vm "${1:?}" "${2:?}" >> "$logfile" || fail "Failed to mkdir -m $*"
+}
+
+log_ln_sft() {
+        ln -vsf -t "$@" >> "$logfile" || fail "Failed to ln -sf -t $*"
 }
 
 has_permission() {
@@ -122,14 +117,16 @@ pkgfiles() {
         shopt -s nullglob
         files=( "${1:?}"-[0-9][0-9\.-]* )
         shopt -u nullglob
-        echo "${files[@]}"
+        if (( ${#files[@]} )); then
+                echo "${files[@]}"
+        fi
 }
 
 # Print package spec of installed version of <package name>
 installed_pkg() {
         local ipath ipaths
 
-        ipaths=( $(pkgfiles "$installroot/${1:?}") )
+        readarray ipaths < <(pkgfiles "$installroot/${1:?}")
         ipath="${ipaths[0]}"
 
         if [[ $ipath ]]; then
@@ -166,7 +163,7 @@ latest_pkg() {
         # Extract package spec from full path listing of tar files
         # Latest version will be sorted to the bottom
 
-        tars=( $(pkgfiles "$pkgroot/$pkg") )
+        readarray tars < <(pkgfiles "$pkgroot/$pkg")
 
         if (( ${#tars[@]} )); then
                 versort "${tars[@]}" | 
@@ -194,28 +191,47 @@ confirm_pkgs() {
 }
 
 # Install package files for <package spec> as symlinks back to the installdir
-# Taking note of the LFS Book's warnings about upgrading glibc this uses
-# a one-shot install mechanism
-# There is no recursive mode for ln so create links in temp root and
-# install with cp -a
+#
+# Required target directories have already been created by install_reqdirs
+#
+# Taking note of the LFS Book's warnings about upgrading glibc this 
+# creates all files in a given directory in one command
+#
+# ln -sf -t <target dir> <non-chroot installdir>{file1,file2,file3,...}
+#
+# Implementation looks a bit ugly but I tried other ways of doing it
+# - install wont install symlinks
+# - cp -a and tar/untar allow a single command to install all files
+#   in one command, which is great, but they may change the file mode
+#   of existing directories - which should never be done (IMHO)
+#   cp -a even changes directory ownership of existing directories!
+#
 # Pre-chroot the links will be broken but will be ok once chrooted
 install_pkgfiles() {
-        local pkg root d f
+        local pkg files ndir odir file file_str
 
         pkg=${1:?}
-        root="$installroot/$pkg/tmproot"
-        mkdir "$root"
-
-        while IFS= read -r d; do
-                mkdir "$root/$d"
-        done < "$(pkgmetafile "$pkg" 'reqdirs')"
-        while IFS= read -r f; do
-                ln -s "$(finalpkgfile "$pkg" "$f")" "$root/$f"
-        done < "$(pkgmetafile "$pkg" 'pkgfiles')"
-
-        log_cpa "$root/"* "${sysroot:-/}"
-
-        rm -r "$root"
+        files=()
+        odir=''
+        while IFS= read -r file; do
+                ndir="${file%/*}"
+                if [[ $ndir != $odir ]]; then
+                        if (( ${#files[@]} )); then
+                                if (( ${#files[@]} > 1 )); then
+                                        file_str="$(printf ",'%s'" "${files[@]}")"
+                                        file_str="{${file_str:1}}"
+                                else
+                                        file_str="'${files[1]}'"
+                                fi
+                                log_ln_sft \
+                                        "$(targetfile "$odir")" \
+                                        "$(finalpkgfile "$pkg" "$odir")/$files"
+                        fi
+                        odir="$ndir"
+                        files=()
+                fi
+                files+=( "${file##*/}" )
+        done < <(echo "***EOF***" | cat "$(pkgmetafile "$pkg" 'pkgfiles')" -)
 }
 
 # Uninstall package files for <package spec> if they still link to the
@@ -232,30 +248,41 @@ uninstall_pkgfiles() {
         done < "$(pkgmetafile "$pkg" 'pkgfiles')"
 }
 
-# Ensure required dirs are created and capture any actually created for
-# potential removal when package is uninstalled
+# Capture any required dirs that we will create on install
+# for potential removal when package is uninstalled
+#
+# Create any missing dirs one by one so we can set correct permissions
+# 
 # When replacing packages retain any dirs in replaced pkgdirs files
-# as these dirs cannot be removed as the new package will be in place
+# as these dirs cannot be removed yet as the new package will be in place
 install_reqdirs() {
-        local npkg opkg d pkgdirs tmpdirs
+        local npkg opkg d pkgdirs tmpdirs tdir mode
 
         npkg=${1:?}
+        shift
+
         pkgdirs="$(pkgmetafile "$npkg" 'pkgdirs')"
         tmpdirs="$(pkgmetafile "$npkg" 'tmpdirs')"
 
         while IFS= read -r d; do
-                log_mkdirpv "$(targetfile "$d")"
+                tdir="$(targetfile "$d")"
+                if [[ ! -d "$tdir" ]]; then
+                        printf "%s\n" "$d"
+                        mode="$(stat -c%a "$(pkgrootfile "$npkg" "$d")")"
+                        log_mkdir_m "$mode" "$tdir"
+                fi
         done \
                 < "$(pkgmetafile "$npkg" 'reqdirs')" \
                 > "$pkgdirs"
 
-        shift
         for opkg; do
                 mv "$pkgdirs" "$tmpdirs"
                 cat "$tmpdirs" \
                     "$(pkgmetafile "$opkg" 'pkgdirs')" |
                     uniq > "$pkgdirs"
+                rm "$tmpdirs"
         done
+
 }
 
 # Only call if this is a real uninstall rather than an upgrade
@@ -419,6 +446,7 @@ install_pkg() {
         install_reqdirs "$@"
         install_pkgfiles "$npkg"
         install_userfiles "$@"
+
 }
 
 # Uninstall <package spec>, optional <package spec> of package that is replacing it
@@ -545,8 +573,8 @@ build_command() {
 
                 # sanity check, symlinks must not point back into spkg directories
                 while IFS= read -r -d '' link; do
-                        if [[ $(readlink "$link") =~ "$libdir" ]]; then
-                                fail "Cannot package: '${link#$pkgdir/}' is a symlink into $libdir"
+                        if [[ $(readlink "$link") =~ $libdir ]]; then
+                                fail "Cannot package: '${link#"$pkgdir"/}' is a symlink into $libdir"
                         fi
                 done < <(find "$pkgdir" -type l -print0)
 
@@ -606,7 +634,7 @@ install_pkg_command() {
         local opkgs npkg
 
         npkg=${1:?}
-        mapfile -t opkgs < <(pkg_replaces "$npkg")
+        readarray -t opkgs < <(pkg_replaces "$npkg")
 
         pre_install_pkg "$npkg" "${opkgs[@]}"
         install_pkg "$npkg" "${opkgs[@]}"
@@ -660,7 +688,7 @@ install_command() {
                                                 # forceable reinstall
                                                 # no idea of the state things are in
                                                 # so remove package installdir and try again
-                                                rm -r "$installroot/$p"
+                                                rm -r "${installroot:?}/$p"
                                         else
                                                 fail "Package $p is already installed, use install -f to force reinstall"
                                         fi

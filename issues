@@ -1,0 +1,36 @@
+Extracted from LFS Hint https://www.linuxfromscratch.org/hints/downloads/files/fakeroot.txt
+
+* Sometimes packages do not create the destination file before installing
+  files into a dir. Normally when installing into / this is not a problem
+  since the destination dir such as /usr/bin would already have been created.
+  But when installing into a fakeroot, you may need to create these dirs
+  manually using install -d.
+* A small minority of packages hardcode the fakeroot directory into the files.
+  It is generally a good idea to peruse the logs.
+* Packages that install info pages create a file /usr/share/info/dir. This
+  file should be recreated after the package is install. Refer to the LFS
+  book's section on texinfo on how to regenrate this file.
+* Perl modules have two problems. One is that the file .packlist hardcodes the
+  FAKEROOT dir in it. This needs to be removed using sed. Additionally, each
+  module installs a shared file perllocal.pod. If the module is installed
+  directly into /, the installation would have appended the new contents to
+  the file. Since we install into a fakeroot, we need to manually append
+  this file to the system installed perllocal.pod and prevent installation of
+  the perllocal.pod installed by the module.
+* Packages that install GConf schemas install the schemas automatically during
+  make install. Since we are installing into a fakeroot, this step needs to be
+  performed in the post installation config step. To disable installation of
+  the schmeas, either set the GCONF_DISABLE_MAKEFILE_SCHEMA_INSTALL var to
+  true during make install or pass the --disable-schema-install switch to
+  configure.
+* For packages that install scrollkeeper catalogs, the scrollkeeper-update
+  process needs to be disabled during installation and the scrollkeeper
+  database needs to be updated in the post installation config.
+* For packages that install fonts, fc-cache and gtk-updated-icon-cache needs to
+  be called during post installation config phase.
+* For packages that install gtk immodules and loaders, the configuration needs
+  to be recreated manually by calling gtk-query-immodules and
+  gdk-pixbuf-query-loaders.
+* For packages that install mime db files, the mime database needs to be
+  updated manually by calling update-mime-database.
+
