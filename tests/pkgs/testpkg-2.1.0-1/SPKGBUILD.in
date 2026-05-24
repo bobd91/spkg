@@ -3,10 +3,10 @@ pkgver=2.1.0
 pkgrel=1
 
 sources=(
-        "testpkg-2.1.0-1.tar.gz"
+        "testpkg-2.1.0.tar.gz"
         )
 md5sums=(
-        d2b079dccc5819c872029be52d30e167
+        TESTPKG_MD5SUM
         )
 
 build() {

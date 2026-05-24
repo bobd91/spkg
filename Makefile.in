@@ -1,5 +1,5 @@
 
-.SILENT: install
+.SILENT: 
 
 install:
 	install -d $(DESTDIR)SPKG_exec_prefix

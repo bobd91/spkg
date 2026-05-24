@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+set -e
+
+pushd() {
+        builtin pushd "$@" > /dev/null
+}
+
+popd() {
+        builtin popd > /dev/null
+}
+
+run_pkg() {
+        local tdir tver md5
+        tdir=$1
+        cd $tdir
+
+        tver=${tdir%-*}
+
+        tar caf "$testroot/sources/$tver.tar.gz" $tver
+        md5=$(md5sum "$testroot/sources/$tver.tar.gz" | awk '{print $1}')
+        mkdir -p $testroot/var/lib/spkg/build/$tdir
+        m4 -DTESTPKG_MD5SUM=$md5 SPKGBUILD.in > $testroot/var/lib/spkg/build/$tdir/SPKGBUILD
+        cd ..
+
+        rm -f $testroot/var/log/spkg/spkg.log
+        $testroot/tools/bin/spkg build $tdir > /dev/null && 
+                $testroot/tools/bin/spkg install -y $tdir > /dev/null
+
+        mv $testroot/var/log/spkg/spkg.log $testroot/results/$tdir.spkg.log
+        if [[ -f $testroot/results/$tdir.trace.log ]];then
+                mv $testroot/var/log/spkg/trace.log $testroot/results/$tdir.trace.log
+        fi
+}
+
+[[ -d testroot ]] && rm -r testroot
+
+files=( configure Makefile.in spkg.bash spkg.conf.in SPKGBUILD.in spkg.in )
+
+mkdir -p testroot/{results,sources,tools}
+
+
+pkgver="$(awk -F"=" '/^version/{print $2}' ../configure)"
+
+cd testroot
+
+testroot=$PWD
+
+src_files=$(printf '../../%s ' ${files[@]})
+
+vdir="spkg-$pkgver"
+mkdir -p $vdir
+cp $src_files $vdir
+
+tfile="spkg-$pkgver.tar.gz"
+
+tar caf $tfile $vdir
+cp $tfile $testroot/sources
+
+pushd $vdir
+./configure --prefix=$testroot/tools \
+            --exec-prefix=$testroot/tools/bin \
+            --with-sysroot=$testroot
+make install
+popd
+
+cp -r ../pkgs .
+
+cd pkgs
+
+while read -r -d '' tdir; do
+        run_pkg $tdir
+done < <(ls -vd --zero testpkg-lib*)
+
+while read -r -d '' tdir; do
+        run_pkg $tdir
+done < <(ls -vd --zero testpkg-[0-9]*)
+
+while read -r -d '' tdir; do
+        run_pkg $tdir
+done < <(ls -vd --zero testpkg2-*)

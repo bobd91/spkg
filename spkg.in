@@ -2,8 +2,6 @@
 
 # Simple Package Manager
 
-# TODO: improve spkg list (columns)
-
 # TODO: testing
 
 # TODO: lfs2spkg 
@@ -14,20 +12,21 @@ sysroot=SPKG_with_sysroot
 prefix=SPKG_prefix
 
 fail() {
-        >&2 echo "$@"
+        >&2 echo "$*"
+        log "$*"
         exit 1
 }
 
 info() {
-        echo "$@"
+        echo "$*"
 }
 
 warn() {
-        echo "Warning:" "$@"
+        echo "Warning: $*"
 }
 
 log() {
-        echo "$@" >> "$logfile"
+        echo "[$(date -Iseconds)] $*" >> "$logfile"
 }
 
 pushd() {
@@ -46,25 +45,25 @@ source() {
         } || fail "Failed to source $*"
 }
 
-log_rm() {
-        rm -v "$@" >> "$logfile" || fail "Failed to rm $*"
+trace_rm() {
+        rm -v "$@" >> "$tracefile" || fail "Failed to rm $*"
 }
 
-log_rmdir() {
-        rmdir -v --ignore-fail-on-non-empty "$@" >> $logfile ||
+trace_rmdir() {
+        rmdir -v --ignore-fail-on-non-empty "$@" >> $tracefile ||
                 fail "Failed to rmdir $*"
 }
 
-log_cp() {
-        cp -v "$@" >> "$logfile" || fail "Failed to cp $*"
+trace_cp() {
+        cp -v "$@" >> "$tracefile" || fail "Failed to cp $*"
 }
 
-log_mkdir_m() {
-        mkdir -vm "${1:?}" "${2:?}" >> "$logfile" || fail "Failed to mkdir -m $*"
+trace_mkdir_m() {
+        mkdir -vm "${1:?}" "${2:?}" >> "$tracefile" || fail "Failed to mkdir -m $*"
 }
 
-log_ln_sft() {
-        ln -vsf -t "$@" >> "$logfile" || fail "Failed to ln -sf -t $*"
+trace_ln_sft() {
+        ln -vsf -t "$@" >> "$tracefile" || fail "Failed to ln -sf -t $*"
 }
 
 has_permission() {
@@ -126,7 +125,7 @@ pkgfiles() {
 installed_pkg() {
         local ipath ipaths
 
-        readarray ipaths < <(pkgfiles "$installroot/${1:?}")
+        readarray -t ipaths < <(pkgfiles "$installroot/${1:?}")
         ipath="${ipaths[0]}"
 
         if [[ $ipath ]]; then
@@ -190,6 +189,62 @@ confirm_pkgs() {
         confirm "$prompt" "$def"
 }
 
+check_install_permissions() {
+        local npkg opkg
+
+        npkg=${1:?}
+
+        shift
+        
+        while read -r file; do
+                tgtfile="$sysroot/${file#*/}"
+                dir="${tgtfile%/*}"
+                if [[ -d $dir ]]; then
+                        [[ -w $dir ]] || fail "Failed, no write permission: $dir"
+                        if [[ -h $tgtfile ]]; then
+                                link="$(readlink "$tgtfile")"
+                                ok=''
+                                if (( $# )); then
+                                        for opkg; do
+                                                if [[ $link =~ ^$installdir/$opkg ]]; then
+                                                        ok=1
+                                                        break
+                                                fi
+                                        done
+                                else
+                                        # will happen with install -f
+                                        if [[ $link =~ ^$installdir/$npkg ]]; then
+                                                ok=1
+                                        fi
+                                fi
+                                [[ $ok ]] ||
+                                        fail "Failed, target file is not from this package: $tgtfile" 
+                        fi
+                fi
+        done < <(tar -taf "$(pkgtarfile "$npkg")" --exclude=.spkg)
+
+        for opkg; do
+                check_uninstall_permissions "$opkg"
+        done
+}
+
+check_uninstall_permissions() {
+        pkg=${1:?}
+
+        while read -r -d '' file; do
+                tgtfile="$sysroot/$file"
+                dir="${tgtfile%/*}"
+                if [[ -d $dir ]]; then
+                        [[ -w $dir ]] || fail "Failed, no write permission: $dir"
+                        if [[ -h $file ]]; then
+                                link="$(readlink "$tgtfile")"
+                                [[ $link =~ ^$installdir/$pkg ]] ||
+                                        fail "Failed, target file is not from this package: $file"
+                        fi
+                fi
+        done < <(find "$installroot/$pkg" -name .spkg -prune -o -type l,f -printf '%P\0')
+}
+
 # Install package files for <package spec> as symlinks back to the installdir
 #
 # Required target directories have already been created by install_reqdirs
@@ -215,17 +270,17 @@ install_pkgfiles() {
         odir=''
         while IFS= read -r file; do
                 ndir="${file%/*}"
-                if [[ $ndir != $odir ]]; then
+                if [[ $ndir != "$odir" ]]; then
                         if (( ${#files[@]} )); then
                                 if (( ${#files[@]} > 1 )); then
                                         file_str="$(printf ",'%s'" "${files[@]}")"
                                         file_str="{${file_str:1}}"
                                 else
-                                        file_str="'${files[1]}'"
+                                        file_str="${files[0]}"
                                 fi
-                                log_ln_sft \
+                                trace_ln_sft \
                                         "$(targetfile "$odir")" \
-                                        "$(finalpkgfile "$pkg" "$odir")/$files"
+                                        "$(finalpkgfile "$pkg" "$odir")/$file_str"
                         fi
                         odir="$ndir"
                         files=()
@@ -243,7 +298,7 @@ uninstall_pkgfiles() {
         while IFS= read -r f; do
                 tgt="$(targetfile "$f")"
                 if [[ "$(readlink "$tgt")" == "$(finalpkgfile "$pkg" "$f")" ]]; then
-                        log_rm "$tgt"
+                        trace_rm "$tgt"
                 fi
         done < "$(pkgmetafile "$pkg" 'pkgfiles')"
 }
@@ -269,7 +324,7 @@ install_reqdirs() {
                 if [[ ! -d "$tdir" ]]; then
                         printf "%s\n" "$d"
                         mode="$(stat -c%a "$(pkgrootfile "$npkg" "$d")")"
-                        log_mkdir_m "$mode" "$tdir"
+                        trace_mkdir_m "$mode" "$tdir"
                 fi
         done \
                 < "$(pkgmetafile "$npkg" 'reqdirs')" \
@@ -294,7 +349,7 @@ uninstall_pkgdirs() {
         pkg=${1:?}
         # Remove in reverse order, for example a/b before a
         for d in $(tac "$(pkgmetafile "$pkg" 'pkgdirs')"); do
-                log_rmdir "$(targetfile "$d")"
+                trace_rmdir "$(targetfile "$d")"
         done
 }
 
@@ -312,7 +367,7 @@ install_userfile() {
 
         # If user file does not exist, copy in new one
         if [[ ! -f "$ufile" ]]; then
-                log_cp "$nfile" "$ufile"
+                trace_cp "$nfile" "$ufile"
                 return
         fi
 
@@ -331,14 +386,14 @@ install_userfile() {
                                 return
                         fi
                         if cmp -s "$ufile" "$ofile"; then
-                                log_cp "$nfile" "$ufile"
+                                trace_cp "$nfile" "$ufile"
                                 return
                         fi
                 fi
         done
 
         # We have a clash so copy in the new file with .spkgnew suffix 
-        log_cp "$nfile" "$(targetfile "$f.spkgnew")"
+        trace_cp "$nfile" "$(targetfile "$f.spkgnew")"
 }
 
 install_userfiles() {
@@ -359,7 +414,7 @@ uninstall_userfile() {
         f=${1:?}
         pkg=${2:?}
         if cmp -s "$(pkgrootfile "$pkg" "$f")" "$(targetfile "$f")"; then
-                log_rm "$(targetfile "$f")"
+                trace_rm "$(targetfile "$f")"
         fi
 }
 
@@ -443,6 +498,8 @@ install_pkg() {
 
         npkg=${1:?}
 
+        log "Installing: $npkg"
+
         install_reqdirs "$@"
         install_pkgfiles "$npkg"
         install_userfiles "$@"
@@ -456,6 +513,8 @@ uninstall_pkg() {
 
         opkg=${1:?}
         npkg=$2
+
+        log "Removing: $opkg"
 
         uninstall_pkgfiles "$opkg" "$npkg"
 
@@ -480,6 +539,8 @@ build_command() {
         local build check package 
         # shellcheck disable=SC2034 # maybe defined in $buildfile
         local pre_install post_install pre_uninstall post_uninstall
+
+        log "Executing: spkg build $*"
 
         while getopts ":cbp" opt; do
                 case $opt in
@@ -574,9 +635,14 @@ build_command() {
                 # sanity check, symlinks must not point back into spkg directories
                 while IFS= read -r -d '' link; do
                         if [[ $(readlink "$link") =~ $libdir ]]; then
-                                fail "Cannot package: '${link#"$pkgdir"/}' is a symlink into $libdir"
+                                fail "Cannot package: '${link#"$pkgdir"/}' is a symlink into ${libdir:1}"
                         fi
                 done < <(find "$pkgdir" -type l -print0)
+
+                # Try and spot other references to spkg directories
+                if grep -r "$libdir" > /dev/null; then
+                        warn "Some package files contain references to ${libdir:1}"
+                fi
 
                 mkdir .spkg
 
@@ -636,6 +702,8 @@ install_pkg_command() {
         npkg=${1:?}
         readarray -t opkgs < <(pkg_replaces "$npkg")
 
+        check_install_permissions "$npkg" "${opkgs[@]}"
+
         pre_install_pkg "$npkg" "${opkgs[@]}"
         install_pkg "$npkg" "${opkgs[@]}"
         post_install_pkg "$npkg" "${opkgs[@]}"
@@ -652,6 +720,8 @@ install_command() {
         local p n f opt_yes opt_force
 
         has_permission || fail "You do not have sufficient privilege to install packages" 
+
+        log "Executing: spkg install $*"
 
         while getopts ":fy" opt; do
                 case $opt in
@@ -719,6 +789,9 @@ uninstall_pkg_command() {
         local pkg
 
         pkg=$1
+
+        check_uninstall_permissions "$pkg"
+
         pre_uninstall_pkg "$pkg"
         uninstall_pkg "$pkg"
         post_uninstall_pkg "$pkg"
@@ -729,6 +802,8 @@ uninstall_command() {
         local p opt_yes
 
         has_permission || fail "You do not have sufficient privilege to uninstall packages" 
+
+        log "Executing: spkg uninstall $*"
 
         while getopts ":y" opt; do
                 case $opt in
@@ -921,7 +996,8 @@ installroot=${sysroot}$installdir
 srcroot=${sysroot}$srccache
 
 logfile=${sysroot}/var/log/spkg/spkg.log
-command mkdir -p "$(dirname "$logfile")"
-printf "%s %s\n" spkg "$*" > "$logfile"  
+tracefile=${sysroot}/var/log/spkg/trace.log
+command mkdir -p "${logfile%/*}"
+rm -f "$tracefile"
 
 run_command "$@"

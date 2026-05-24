@@ -1,12 +1,12 @@
-pkgname=testpkg
+pkgname=testpkg-lib1
 pkgver=1.0.0
 pkgrel=1
 
 sources=(
-        "testpkg-1.0.0-1.tar.gz"
+        "testpkg-lib1-1.0.0.tar.gz"
         )
 md5sums=(
-        35d35e5d1eceb70a5395e81f7df6d582
+        TESTPKG_MD5SUM 
         )
 
 build() {
@@ -16,7 +16,7 @@ build() {
 
 package() {
         echo "Installing $pkgname-$pkgver-$pkgrel"
-        cp -av {usr,etc} $pkgdir
+        cp -av usr $pkgdir
 }
 
 

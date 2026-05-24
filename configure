@@ -76,6 +76,11 @@ validate_options() {
                 fi
         done
 
+        # Create spkg bash script in current directory 
+        # And try to create spkg directory in sysroot 
+        # So enforce current directory != with_sysroot
+        [[ $with_sysroot != "$PWD" ]] || fail "Cannot configure with_sysroot as current directory"
+
         builddir="${with_sysroot}$libdir/build/$pkg-$version-$release"
         pkgdir="${with_sysroot}libdir/pkg"
         srcfile="${with_sysroot}$srccache/$pkg-$version.tar.gz"
