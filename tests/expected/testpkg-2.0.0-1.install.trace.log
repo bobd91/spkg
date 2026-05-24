@@ -1,0 +1,6 @@
+'/home/bob/spkg/tests/testroot/usr/share/lib1/info' -> '/spkg/testpkg-2.0.0-1/usr/share/lib1/info'
+'/home/bob/spkg/tests/testroot/usr/bin/testpkg' -> '/spkg/testpkg-2.0.0-1/usr/bin/testpkg'
+'/home/bob/spkg/tests/testroot/usr/lib/lib1.so.2' -> '/spkg/testpkg-2.0.0-1/usr/lib/lib1.so.2'
+'/home/bob/spkg/tests/testroot/usr/lib/lib2.so.2' -> '/spkg/testpkg-2.0.0-1/usr/lib/lib2.so.2'
+removed '/home/bob/spkg/tests/testroot/usr/lib/lib2.so.1'
+removed '/home/bob/spkg/tests/testroot/usr/lib/lib1.so.1'

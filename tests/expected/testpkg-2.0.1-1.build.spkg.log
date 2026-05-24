@@ -1,0 +1,4 @@
+[Info] executing: spkg build testpkg-2.0.1-1
+build function for: testpkg-2.0.1-1
+package function for: testpkg-2.0.1-1
+[Info] package added testpkg-2.0.1-1

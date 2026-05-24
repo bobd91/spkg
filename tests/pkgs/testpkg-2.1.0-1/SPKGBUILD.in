@@ -11,30 +11,30 @@ md5sums=(
 
 build() {
         cd "$pkgname-$pkgver"
-        echo "Building $pkgname-$pkgver-$pkgrel"
+        echo "build function for: $pkgname-$pkgver-$pkgrel"
 }
 
 package() {
-        echo "Installing $pkgname-$pkgver-$pkgrel"
-        cp -av {usr,etc} $pkgdir
+        echo "package function for: $pkgname-$pkgver-$pkgrel"
+        cp -a {usr,etc} $pkgdir
 }
 
 pre_install() {
-        echo "Pre install: $*"
-        echo "Modifying /etc/testpkg.conf prior to installation"
+        echo "pre_install function: $*"
+        echo "modifying /etc/testpkg.conf prior to installation"
         sed -i -e 's|\(.*\)|\1 - Modified|' "$sysroot/etc/testpkg.conf"
 }
 
 post_install() {
-        echo "Post install: $*"
+        echo "post_install function: $*"
 }
 
 pre_uninstall() {
-        echo "Pre uninstall: $*"
+        echo "pre_uninstall function: $*"
 }
 
 post_uninstall() {
-        echo "Post uninstall: $*"
+        echo "post_uninstall function: $*"
 }
 
 

@@ -1,0 +1,5 @@
+mkdir: created directory '/home/bob/spkg/tests/testroot/etc'
+mkdir: created directory '/home/bob/spkg/tests/testroot/usr'
+mkdir: created directory '/home/bob/spkg/tests/testroot/usr/bin'
+'/home/bob/spkg/tests/testroot/usr/bin/testpkg' -> '/spkg/testpkg-1.0.0-1/usr/bin/testpkg'
+'/home/bob/spkg/tests/testroot/spkg/testpkg-1.0.0-1/etc/testpkg.conf' -> '/home/bob/spkg/tests/testroot/etc/testpkg.conf'

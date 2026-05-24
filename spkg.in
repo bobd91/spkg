@@ -12,21 +12,27 @@ sysroot=SPKG_with_sysroot
 prefix=SPKG_prefix
 
 fail() {
-        >&2 echo "$*"
-        log "$*"
+        >&2 echo "Failed: $*"
+        log "[Failed]" "$@"
         exit 1
 }
 
 info() {
         echo "$*"
+        log "[Info]" "$@"
 }
 
 warn() {
         echo "Warning: $*"
+        log "[Warning]" "$@" 
 }
 
 log() {
         echo "[$(date -Iseconds)] $*" >> "$logfile"
+}
+
+trace() {
+        echo "$*" >> "$tracefile"
 }
 
 pushd() {
@@ -42,28 +48,28 @@ source() {
                 pushd .
                 builtin source "$@"
                 popd
-        } || fail "Failed to source $*"
+        } || fail "source $*"
 }
 
 trace_rm() {
-        rm -v "$@" >> "$tracefile" || fail "Failed to rm $*"
+        rm -v "$@" >> "$tracefile" || fail "rm $*"
 }
 
 trace_rmdir() {
         rmdir -v --ignore-fail-on-non-empty "$@" >> $tracefile ||
-                fail "Failed to rmdir $*"
+                fail "rmdir $*"
 }
 
 trace_cp() {
-        cp -v "$@" >> "$tracefile" || fail "Failed to cp $*"
+        cp -v "$@" >> "$tracefile" || fail "cp $*"
 }
 
 trace_mkdir_m() {
-        mkdir -vm "${1:?}" "${2:?}" >> "$tracefile" || fail "Failed to mkdir -m $*"
+        mkdir -vm "${1:?}" "${2:?}" >> "$tracefile" || fail "mkdir -m $*"
 }
 
 trace_ln_sft() {
-        ln -vsf -t "$@" >> "$tracefile" || fail "Failed to ln -sf -t $*"
+        ln -vsf -t "$@" >> "$tracefile" || fail "ln -sf -t $*"
 }
 
 has_permission() {
@@ -77,7 +83,7 @@ is_fn() {
 call_fn() {
         if is_fn "$1"; then
                 if ! "$@" >> "$logfile" ; then
-                        fail "Function $1 failed" 
+                        fail "function $1" 
                 fi
         fi
 }
@@ -190,17 +196,15 @@ confirm_pkgs() {
 }
 
 check_install_permissions() {
-        local npkg opkg
+        local npkg opkg tgtfile dir link ok
 
         npkg=${1:?}
-
         shift
-        
         while read -r file; do
                 tgtfile="$sysroot/${file#*/}"
                 dir="${tgtfile%/*}"
                 if [[ -d $dir ]]; then
-                        [[ -w $dir ]] || fail "Failed, no write permission: $dir"
+                        [[ -w $dir ]] || fail "no write permission: $dir"
                         if [[ -h $tgtfile ]]; then
                                 link="$(readlink "$tgtfile")"
                                 ok=''
@@ -218,7 +222,7 @@ check_install_permissions() {
                                         fi
                                 fi
                                 [[ $ok ]] ||
-                                        fail "Failed, target file is not from this package: $tgtfile" 
+                                        fail "install file is not owned by this package: $tgtfile" 
                         fi
                 fi
         done < <(tar -taf "$(pkgtarfile "$npkg")" --exclude=.spkg)
@@ -229,20 +233,22 @@ check_install_permissions() {
 }
 
 check_uninstall_permissions() {
-        pkg=${1:?}
+        local opkg tgtfile dir
+
+        opkg=${1:?}
 
         while read -r -d '' file; do
                 tgtfile="$sysroot/$file"
                 dir="${tgtfile%/*}"
                 if [[ -d $dir ]]; then
-                        [[ -w $dir ]] || fail "Failed, no write permission: $dir"
-                        if [[ -h $file ]]; then
+                        [[ -w $dir ]] || fail "no write permission: $dir"
+                        if [[ -h $tgtfile ]]; then
                                 link="$(readlink "$tgtfile")"
-                                [[ $link =~ ^$installdir/$pkg ]] ||
-                                        fail "Failed, target file is not from this package: $file"
+                                [[ $link =~ ^$installdir/$opkg ]] ||
+                                        fail "uninstall file is not owned by this package: $tgtfile : $link"
                         fi
                 fi
-        done < <(find "$installroot/$pkg" -name .spkg -prune -o -type l,f -printf '%P\0')
+        done < <(find "$installroot/$opkg" -name .spkg -prune -o -type l,f -printf '%P\0')
 }
 
 # Install package files for <package spec> as symlinks back to the installdir
@@ -263,7 +269,7 @@ check_uninstall_permissions() {
 #
 # Pre-chroot the links will be broken but will be ok once chrooted
 install_pkgfiles() {
-        local pkg files ndir odir file file_str
+        local pkg files ndir odir file fdir
 
         pkg=${1:?}
         files=()
@@ -272,15 +278,11 @@ install_pkgfiles() {
                 ndir="${file%/*}"
                 if [[ $ndir != "$odir" ]]; then
                         if (( ${#files[@]} )); then
-                                if (( ${#files[@]} > 1 )); then
-                                        file_str="$(printf ",'%s'" "${files[@]}")"
-                                        file_str="{${file_str:1}}"
-                                else
-                                        file_str="${files[0]}"
-                                fi
+                                fdir="$(finalpkgfile "$pkg" "$odir")"
+                                files=( $(printf "$fdir/%s\n" "${files[@]}") )
                                 trace_ln_sft \
                                         "$(targetfile "$odir")" \
-                                        "$(finalpkgfile "$pkg" "$odir")/$file_str"
+                                        "${files[@]}"
                         fi
                         odir="$ndir"
                         files=()
@@ -498,8 +500,6 @@ install_pkg() {
 
         npkg=${1:?}
 
-        log "Installing: $npkg"
-
         install_reqdirs "$@"
         install_pkgfiles "$npkg"
         install_userfiles "$@"
@@ -514,7 +514,7 @@ uninstall_pkg() {
         opkg=${1:?}
         npkg=$2
 
-        log "Removing: $opkg"
+        info "removing: $opkg"
 
         uninstall_pkgfiles "$opkg" "$npkg"
 
@@ -540,33 +540,33 @@ build_command() {
         # shellcheck disable=SC2034 # maybe defined in $buildfile
         local pre_install post_install pre_uninstall post_uninstall
 
-        log "Executing: spkg build $*"
+        info "executing: spkg build $*"
 
         while getopts ":cbp" opt; do
                 case $opt in
                         c ) opt_check=1 ;; 
                         b ) opt_build_only=1 ;;
                         p ) opt_package_only=1 ;;
-                        * ) fail "Invalid option: $OPTARG" ;;
+                        * ) fail "invalid option: $OPTARG" ;;
                 esac
         done
         shift $(( OPTIND - 1 ))
 
         if [[ ( $opt_build_only || $opt_check ) && $opt_package_only ]]; then
-                fail "Cannot use option -p with -b or -c"
+                fail "cannot use option -p with -b or -c"
         fi
 
         pkg=$1
-        parse_pkgspec "$pkg" || fail "Invalid package name $pkg"
+        parse_pkgspec "$pkg" || fail "invalid package name $pkg"
 
         builddir=$buildroot/$pkg
         pkgfile=$(pkgtarfile "$pkg")
         srcdir=$builddir/src
         pkgdir=$builddir/pkg/$pkg
 
-        [[ ! -f $pkgfile ]] || fail "Package already exists $pkgfile"
-        [[ -d $builddir ]] || fail "Missing build directory $builddir"
-        [[ -f $builddir/$buildfile ]] || fail "Missing $buildfile in build directory $builddir"
+        [[ ! -f $pkgfile ]] || fail "package already exists $pkgfile"
+        [[ -d $builddir ]] || fail "missing build directory $builddir"
+        [[ -f $builddir/$buildfile ]] || fail "missing $buildfile in build directory $builddir"
 
         cd "$builddir"
         
@@ -577,11 +577,11 @@ build_command() {
         # shellcheck disable=SC1090 # package supplied build file
         source "$buildfile"
 
-        [[ "$pkg" == "$pkgname-$pkgver-$pkgrel" ]] || fail "Build is not for $pkg"
+        [[ "$pkg" == "$pkgname-$pkgver-$pkgrel" ]] || fail "build is not for $pkg"
 
         if [[ ! $opt_package_only ]]; then
 
-                (( ${#sources[@]} == "${#md5sums[@]}" )) || fail "Unexpected number of md5sums $pkg" 
+                (( ${#sources[@]} == "${#md5sums[@]}" )) || fail "wrong number of md5sums $pkg" 
 
                 [[ -d src ]] && rm -rf src
                 [[ -d pkg ]] && rm -rf pkg
@@ -608,8 +608,8 @@ build_command() {
                                 src=$srcroot/$src
                         fi
 
-                        [[ -f $src ]] || fail "Source not found $src"
-                        [[ $(md5sum "$src") == "$md5  $src" ]] || fail "Incorrect md5sum for $src"  
+                        [[ -f $src ]] || fail "source not found $src"
+                        [[ $(md5sum "$src") == "$md5  $src" ]] || fail "incorrect md5sum for $src"  
 
                         # only untar the first source file
                         if (( i )) || ! tar xaf "$src" -C src 2>/dev/null; then
@@ -625,7 +625,7 @@ build_command() {
                 call_fn package
         else
                 if [[ ! ( -d $srcdir && -d $pkgdir ) ]]; then
-                        fail "Cannot add package, package not built"
+                        fail "cannot add package, package not built"
                 fi
         fi
 
@@ -635,13 +635,14 @@ build_command() {
                 # sanity check, symlinks must not point back into spkg directories
                 while IFS= read -r -d '' link; do
                         if [[ $(readlink "$link") =~ $libdir ]]; then
-                                fail "Cannot package: '${link#"$pkgdir"/}' is a symlink into ${libdir:1}"
+                                fail "cannot package: '${link#"$pkgdir"/}' is a symlink into ${libdir:1}"
                         fi
                 done < <(find "$pkgdir" -type l -print0)
 
                 # Try and spot other references to spkg directories
-                if grep -r "$libdir" > /dev/null; then
-                        warn "Some package files contain references to ${libdir:1}"
+                # Except spkg package of course!
+                if [[ $pkgname != 'spkg' ]] && grep -r "$libdir" > /dev/null; then
+                        warn "some package files contain references to ${libdir:1}"
                 fi
 
                 mkdir .spkg
@@ -654,7 +655,7 @@ build_command() {
 
                 {
                         for f in "${userfiles[@]}"; do
-                                [[ ${f::1} == '/' ]] || fail "Userfiles must be absolute paths"
+                                [[ ${f::1} == '/' ]] || fail "userfiles must be absolute paths"
                                 find . -path ".$f" -type f -printf "%P\n"
                         done
                 } > .spkg/userfiles
@@ -675,9 +676,9 @@ build_command() {
 
                 rm -rf src pkg
 
-                info "Package added $pkg"
+                info "package added $pkg"
         else
-                info "Package built $pkg"
+                info "package built $pkg"
         fi
 }
 
@@ -719,15 +720,15 @@ install_command() {
         declare -a pkgs
         local p n f opt_yes opt_force
 
-        has_permission || fail "You do not have sufficient privilege to install packages" 
+        has_permission || fail "insufficient privilege to install packages" 
 
-        log "Executing: spkg install $*"
+        info "executing: spkg install $*"
 
         while getopts ":fy" opt; do
                 case $opt in
                         f ) opt_force=1 ;; 
                         y ) opt_yes=1 ;;
-                        * ) fail "Invalid option: $OPTARG" ;;
+                        * ) fail "invalid option: $OPTARG" ;;
                 esac
         done
         shift $(( OPTIND - 1 ))
@@ -760,7 +761,7 @@ install_command() {
                                                 # so remove package installdir and try again
                                                 rm -r "${installroot:?}/$p"
                                         else
-                                                fail "Package $p is already installed, use install -f to force reinstall"
+                                                fail "package $p is already installed, use install -f to force reinstall"
                                         fi
                                 fi
                                 pkgs+=("$p")
@@ -774,11 +775,11 @@ install_command() {
         fi
 
         if (( ${#pkgs[@]} == 0 )); then
-                info "No packages to upgrade/install"
+                info "no packages to upgrade/install"
         elif [[ $opt_yes ]] ||
                         confirm_pkgs "Install [Y/n]? " "y" "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
-                        info "Installing $p"
+                        info "installing: $p"
                         install_pkg_command "$p"
                 done
                 info "${#pkgs[@]} packages upgraded/installed"
@@ -801,14 +802,14 @@ uninstall_command() {
         declare -a pkgs
         local p opt_yes
 
-        has_permission || fail "You do not have sufficient privilege to uninstall packages" 
+        has_permission || fail "insufficient privilege to uninstall packages" 
 
-        log "Executing: spkg uninstall $*"
+        info "executing: spkg uninstall $*"
 
         while getopts ":y" opt; do
                 case $opt in
                         y ) opt_yes=1 ;;
-                        * ) fail "Invalid option: $OPTARG" ;;
+                        * ) fail "invalid option: $OPTARG" ;;
                 esac
         done
         shift $(( OPTIND - 1 ))
@@ -818,7 +819,7 @@ uninstall_command() {
                         if is_installed "$p"; then
                                 pkgs+=("$p")
                         else
-                                fail "Package is not installed $pkg"
+                                fail "package is not installed $pkg"
                         fi
                 else 
                         # should only ever be 0 or 1
@@ -830,11 +831,11 @@ uninstall_command() {
         done
 
         if (( ${#pkgs[@]} == 0 )); then
-                info 'No packages to uninstall'
+                info 'no packages to uninstall'
         elif [[ $opt_yes ]] ||
                         confirm_pkgs 'Uninstall [Y/n]? ' 'y' "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
-                        info "Uninstalling $p"
+                        info "uninstalling: $p"
                         uninstall_pkg_command "$p"
                 done
                 info "${#pkgs[@]} packages uninstalled"
@@ -970,7 +971,7 @@ run_command() {
                 -v|--version )   info "$(basename "$0") $version" ;;
                 -h|--help|help ) help ;;
                 "" )             usage ;;
-                * )              fail "Invalid command: $cmd" ;;
+                * )              fail "invalid command: $cmd" ;;
         esac
 }
 

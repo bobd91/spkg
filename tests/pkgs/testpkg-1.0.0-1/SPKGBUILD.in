@@ -11,12 +11,12 @@ md5sums=(
 
 build() {
         cd "$pkgname-$pkgver"
-        echo "Building $pkgname-$pkgver-$pkgrel"
+        echo "build function for: $pkgname-$pkgver-$pkgrel"
 }
 
 package() {
-        echo "Installing $pkgname-$pkgver-$pkgrel"
-        cp -av {usr,etc} $pkgdir
+        echo "package function for: $pkgname-$pkgver-$pkgrel"
+        cp -a {usr,etc} $pkgdir
 }
 
 

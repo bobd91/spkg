@@ -1,0 +1,3 @@
+[Info] executing: spkg install -y testpkg2-1.0.0-1
+[Info] installing: testpkg2-1.0.0-1
+[Failed] install file is not owned by this package: /home/bob/spkg/tests/testroot/usr/share/lib1/info

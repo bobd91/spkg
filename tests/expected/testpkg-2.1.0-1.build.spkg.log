@@ -1,0 +1,5 @@
+[Info] executing: spkg build testpkg-2.1.0-1
+build function for: testpkg-2.1.0-1
+package function for: testpkg-2.1.0-1
+[Warning] some package files contain references to var/lib/spkg
+[Info] package added testpkg-2.1.0-1

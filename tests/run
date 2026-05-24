@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-set -e
-
 pushd() {
         builtin pushd "$@" > /dev/null
 }
@@ -10,26 +8,62 @@ popd() {
         builtin popd > /dev/null
 }
 
+log_diff() {
+        echo "Log files differ: ${1##*/}" >&2
+}
+
+compare_log() {
+        if cmp "$@"; then
+                printf '.'
+        else
+                printf 'x'
+                log_diff "$@"
+        fi
+}
+
+spkg_log_move() {
+        sed -e 's|\[[^]]*\] \(.*\)|\1|' < ${1:?} > ${2:?}
+        rm -f $1
+}
+
+compare_logs() {
+        local tdir action
+
+        tdir=${1:?}
+        action=${2:?}
+
+        spkg_log_move $logdir/spkg.log $resultdir/$tdir.$action.spkg.log
+        compare_log $resultdir/$tdir.$action.spkg.log $expectdir/$tdir.$action.spkg.log
+
+        if [[ -f $logdir/trace.log ]];then
+                mv $logdir/trace.log $resultdir/$tdir.$action.trace.log
+                compare_log $resultdir/$tdir.$action.spkg.log $expectdir/$tdir.$action.spkg.log
+        fi
+}
+
 run_pkg() {
         local tdir tver md5
-        tdir=$1
+
+        tdir=${1:?}
         cd $tdir
 
         tver=${tdir%-*}
 
-        tar caf "$testroot/sources/$tver.tar.gz" $tver
-        md5=$(md5sum "$testroot/sources/$tver.tar.gz" | awk '{print $1}')
-        mkdir -p $testroot/var/lib/spkg/build/$tdir
-        m4 -DTESTPKG_MD5SUM=$md5 SPKGBUILD.in > $testroot/var/lib/spkg/build/$tdir/SPKGBUILD
+        tar caf "$srcdir/$tver.tar.gz" $tver
+        md5=$(md5sum "$srcdir/$tver.tar.gz" | awk '{print $1}')
+        mkdir -p $libdir/build/$tdir
+        m4 -DTESTPKG_MD5SUM=$md5 SPKGBUILD.in > $libdir/build/$tdir/SPKGBUILD
         cd ..
 
-        rm -f $testroot/var/log/spkg/spkg.log
-        $testroot/tools/bin/spkg build $tdir > /dev/null && 
-                $testroot/tools/bin/spkg install -y $tdir > /dev/null
+        rm -f $logdir/spkg.log
 
-        mv $testroot/var/log/spkg/spkg.log $testroot/results/$tdir.spkg.log
-        if [[ -f $testroot/results/$tdir.trace.log ]];then
-                mv $testroot/var/log/spkg/trace.log $testroot/results/$tdir.trace.log
+        $spkg build $tdir &> /dev/null
+        r=$?
+        compare_logs "$tdir" "build"
+        
+        if (( r == 0 )); then
+                $spkg install -y $tdir &> /dev/null
+                compare_logs "$tdir" "install"
         fi
 }
 
@@ -45,6 +79,13 @@ pkgver="$(awk -F"=" '/^version/{print $2}' ../configure)"
 cd testroot
 
 testroot=$PWD
+spkg=$testroot/tools/bin/spkg
+srcdir=$testroot/sources
+libdir=$testroot/var/lib/spkg
+logdir=$testroot/var/log/spkg
+resultdir=$testroot/results
+expectdir=${testroot%/*}/expected
+
 
 src_files=$(printf '../../%s ' ${files[@]})
 
@@ -68,14 +109,28 @@ cp -r ../pkgs .
 
 cd pkgs
 
-while read -r -d '' tdir; do
-        run_pkg $tdir
-done < <(ls -vd --zero testpkg-lib*)
+# Simple package with bin and etc
+run_pkg testpkg-1.0.0-1
 
-while read -r -d '' tdir; do
-        run_pkg $tdir
-done < <(ls -vd --zero testpkg-[0-9]*)
+# 2 libraries (multiple links to same directory)
+run_pkg testpkg-lib1-1.0.0-1
 
-while read -r -d '' tdir; do
-        run_pkg $tdir
-done < <(ls -vd --zero testpkg2-*)
+# Merges testpkg and testpg-lib1 
+# And changes library names (uninstall should remove old)
+run_pkg testpkg-2.0.0-1
+
+# Change to file in usr/share/lib1
+run_pkg testpkg-2.0.1-1
+
+# Modified .conf file and changes /etc/spkg.conf in files system
+# to simulate user change - should create .spkgnew file
+# Also outputs info for pre/post install/uninstall functions
+# Also adds files with different permissions
+# Also has file containing /var/lib/spkg text - should create warning
+run_pkg testpkg-2.1.0-1
+
+# New package with file owned by spkg
+# Should fail
+run_pkg testpkg2-1.0.0-1
+
+printf '\n'
