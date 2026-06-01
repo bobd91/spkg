@@ -148,6 +148,7 @@ parse_pkgspec() {
 }
 
 pkgfiles() {
+        local files
         shopt -s nullglob
         files=( "${1:?}"-[0-9][0-9\.-]* )
         shopt -u nullglob
@@ -162,7 +163,7 @@ installed_pkg() {
         local pkgspec="$installroot/$pkgname/.spkg/pkgspec"
 
         if [[ -f $pkgspec ]]; then
-                cat "$pkgspec"
+                try cat "$pkgspec"
         fi
 }
 
@@ -170,9 +171,8 @@ installed_pkg() {
 is_installed() {
         local pkgspec=${1:?}
         local pkgname=${pkgspec%-*-*}
-        local pkgdir="$installroot/$pkgname"
 
-        [[ -d "$pkgdir" && $pkgspec == "$(cat "$pkgdir/.spkg/pkgspec")" ]]
+        [[ $pkgspec == "$(installed_pkg "$pkgname")" ]]
 }
 
 # Print package specs that match args sorted by name and version number
@@ -187,7 +187,7 @@ versort() {
                 shift
         fi
 
-        try ls "$args" "$@" 2>/dev/null
+        try ls "$args" "$@" 2> /dev/null
 }
 
 # Print package spec of the <package name> with the highest version number
@@ -268,7 +268,7 @@ pkg_replaces() {
         local rep
 
         # we need to look at .spkg/replaces file before installing
-        while try read -r rep; do
+        while read -r rep; do
                 installed_pkg "$rep"
         done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
 }
@@ -281,8 +281,6 @@ install_command() {
 
         has_permission || fail "insufficient privilege to install packages" 
 
-        info "executing: spkg install $*"
-
         while getopts ":fy" opt; do
                 case $opt in
                         f ) opt_force=1 ;; 
@@ -291,6 +289,8 @@ install_command() {
                 esac
         done
         shift $(( OPTIND - 1 ))
+
+        info "executing: spkg install $*"
 
         try cd "$pkgroot"
 
@@ -353,8 +353,6 @@ uninstall_command() {
 
         has_permission || fail "insufficient privilege to uninstall packages" 
 
-        info "executing: spkg uninstall $*"
-
         while getopts ":y" opt; do
                 case $opt in
                         y ) opt_yes=1 ;;
@@ -362,6 +360,8 @@ uninstall_command() {
                 esac
         done
         shift $(( OPTIND - 1 ))
+
+        info "executing: spkg uninstall $*"
 
         for p; do
                 if parse_pkgspec "$p"; then
@@ -421,20 +421,57 @@ help_command() {
         show_help
 }
 
+have_partial_install() {
+        declare -a ipkg
+        try readarray -t ipkg < <(try find "$installroot" -maxdepth 1 -type d -name '.i_*' -printf '%P\n')
+        case "${#ipkg[@]}" in
+                0) return 1 ;;
+                1) partial_install="${ipkg[0]}" ; return ;;
+                *) fail "Multiple partial installations found, manual intervention required" ;;
+        esac
+}
+
+recover_command() {
+        require 'install'
+
+        # partial_install set by have_partial_install and
+        # is the only way for recovery to be attempted
+        if recover_pkg_command "$partial_install"; then
+                info 'Package installation recovery complete'
+        else
+                info 'Package installation rolled back, please re-install'
+        fi
+}
+
 run_command() {
         local cmd=$1
 
         (( $# == 0 )) || shift
+
         case "$cmd" in
                 build )          build_command "$@" ;;
                 install )        install_command "$@" ;;
                 uninstall )      uninstall_command "$@" ;;
                 list )           list_command "$@" ;;
-                -v|--version )   info "$(basename "$0") $version" ;;
+                -v|--version )   info "${0##*/} $version" ;;
                 -h|--help|help ) help_command ;;
                 "" )             usage ;;
                 * )              fail "invalid command: $cmd" ;;
         esac
+}
+
+run_recover_command() {
+        local cmd=$1
+
+        [[ $cmd == "recover" && $# == 1 ]] && recover_command
+
+        fail << EOF
+partial package installation detected, run:
+
+${0##*/} recover
+
+to complete the installation
+EOF
 }
 
 libdir=/var/lib/spkg
@@ -464,6 +501,11 @@ logfile=${logroot}/spkg.log
 tracefile=${logroot}/trace.log
 
 try mkdir -p "${logfile%/*}"
-try rm -f "$tracefile"
 
-run_command "$@"
+if have_partial_install; then
+        cmd=run_recover_command
+else
+        cmd=run_command
+fi
+
+$cmd "$@" > >(tee $outlog) 2> >(tee $errlog >&2)

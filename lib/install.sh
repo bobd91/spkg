@@ -334,13 +334,13 @@ install_pkg() {
         install_recover_pkg 0 "$@"
 }
 
-# Only call if there is both a <pkg> and a <.i_pkg> directory in installroot
+# Only call if there is an <.i_pkg> directory in installroot
 # Removes .i_pkg dir and returns 1 if insufficient recovery information 
 # This may happen if failure occurs very early in original install
 # so should be safe for user to try again
-recover_pkg() {
-        local pkgdir=${1:?}
-        local ipkgdir=".i_$pkgdir"
+recover_pkg_command() {
+        local ipkgdir=${1:?}
+        local pkgdir="${ipkgdir:3}"
         local rpkgdir entry recovery_pt
         declare -a args log
 

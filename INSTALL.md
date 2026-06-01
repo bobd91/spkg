@@ -42,7 +42,7 @@ spkg list
 * spkg-1.0.0-1
 
 For those who are installing pre-chroot the newly installed version will not be usable until chrooted, 
-the bootsrap version can be used until then.
+the bootsrap version should be used until then.
 
 
 

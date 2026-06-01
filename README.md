@@ -67,7 +67,7 @@ Conflicting changes to user files are managed in a similar manner to Arch Linux'
 
 Spkg does not have a package database but rather uses the file system.  You may move files in
 and out of the /var/lib/spkg/..  directories as you see fit.  The package manager
-does not remove files from the ./old directories so overtime they may get rather large.  Removing
+does not remove files from the ./old directories so over time they may get rather large.  Removing
 unwanted files is an excercise for the reader.
 
 ## The Package Build Process
@@ -110,85 +110,6 @@ Passing the -p option will create an spkg package from a previously halted build
 
 
 ## The Package Installation Process
-
-
-
-
-# Build Files
-
-Each build requires a directory with the name of the package spec, which is 
-<package name>-<package version>-<package release>.  For example spkg-1.0.0-1 
-
-The release number allows changes, such as security patches, to be made without changing the version number.
-
-The build directory holds a single file named SPKGBUILD. Additional files may be included but usually all files will come from the source tarball.
-
-An SPKGBUILD is a bash file that is sourced by the build system.  It takes the following format:
-
-# Package details, for spkg-1.0.0-1 it would be
-pkgname=spkg
-pkgver=1.0.0
-pkgrel=1
-
-# Details of source files and their checksums
-# The first file provided is regarded as the main source tarball
-# and will be untarred in the ./src directory
-# Subsequent files will be copied to the ./src directory
-# Files are cached when downloaded and are always looked for in the cache first
-# Https urls will still work in a chroot environment before there is a functioning network
-# as long as the files have been downloaded into the sources directory
-sources=(
-        url to source tarballs (https only at the moment)
-        other urls or files (absolute or relative path)
-        )
-md5sums=(
-        md5sum of each file
-        )
-
-# Optional: defaults to ( '/etc/*' )
-# Which files are to be regarded as owned by the user
-userfiles+=( other user files )
-
-# Optional: defaults to name of current package, e.g. ( 'spkg' )
-# Which packages this package replaces
-replaces+=( other package name )
-
-# Functions to build, test and package up the software
-
-build() {
-    # pwd is <build directory>/src so cd into untarred source
-    cd "$pkgname-$pkgver"
-
-    # configure
-    # make
-}
-
-check() {
-    # make check
-}
-
-package() {
-    # Install built files into directory provided for us
-    # make DESTDIR=$pkgdir install 
-}
-
-# Optional functions to run pre/post install and uninstall
-# Note: these functions will be copied out of this file to be called when required
-#       so they cannot rely on any of the variables above
-
-# Called with <new package spec> [<old package specs ...>]
-pre_install() {
-}
-
-post_install() {
-}
-
-# Called with <old package spec> [<new package spec>]
-pre_uninstall() {
-}
-
-post_uninstall() {
-}
 
 
 
