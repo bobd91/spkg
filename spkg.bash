@@ -17,17 +17,17 @@ _spkg_completions() {
                         esac
                 else
                         case ${COMP_WORDS[1]} in
-                                build ) opts=( $(spkg list -d | grep '^ ' | sed 's|^..||' ) ) ;;
+                                build ) opts=( $(spkg list -d | grep '^d' | sed 's|^..||' ) ) ;;
                                 install ) 
-                                        g='^ '
+                                        g='^p'
                                         for (( i = 2 ; i < COMP_CWORD ; i++ )); do
                                                 if [[ ${COMP_WORDS[i]} =~ 'f' ]]; then
-                                                        g='^*'
+                                                        g='^i'
                                                         break
                                                 fi
                                         done
                                         opts=( $(spkg list | grep "$g" | sed 's|^..||' ) ) ;;
-                                uninstall ) opts=( $(spkg list | grep '^*' | sed 's|^..||' ) ) ;;
+                                uninstall ) opts=( $(spkg list | grep '^i' | sed 's|^..||' ) ) ;;
                                 * ) opts=() ;;
                         esac
                         compopt -o nospace

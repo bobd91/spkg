@@ -94,6 +94,7 @@ apply_options() {
         m4 \
                 -DSPKG_with_sysroot="$with_sysroot" \
                 -DSPKG_prefix="$prefix" \
+                -DSPKG_version="$version" \
                 spkg.in > spkg
 
         m4 \
@@ -146,7 +147,7 @@ get_src_md5() {
 }
 
 pkg=spkg
-version=0.1.0
+version=0.1.1
 release=1
 
 is_spkgbuild=no

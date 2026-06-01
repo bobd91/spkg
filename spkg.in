@@ -2,20 +2,106 @@
 
 # Simple Package Manager
 
+# TODO: improve error logging and failure behaviour
+
+# TODO: confirm that pkgdirs are copied forward into new package
+
+# TODO: check uninstall behaviour of merged/replaced packages
+
 # TODO: testing
 
 # TODO: lfs2spkg 
 
-set -e
+# shellcheck disable=SC2164 # we shadow cd to check for failure
+# shellcheck disable=SC1090,SC1091 # we source lots of user defined files
 
+# configure replaces SPKG_... values
 sysroot=SPKG_with_sysroot
 prefix=SPKG_prefix
+version=SPKG_version
 
-fail() {
-        >&2 echo "Failed: $*"
-        log "[Failed]" "$@"
+set -E
+trap abort SIGUSR1
+sigpid=$$
+
+exec {stdout} >&1
+exec {stderr} >&2
+
+abort() {
+        printf 'Aborting...\n' >&2
         exit 1
 }
+
+# Program failure
+die() {
+        local errno=$1
+        local level=$2
+        local where
+        readarray -d ' ' -t where < <(caller $level)
+        shift 2
+        printf '%s => failed(%s) at %s:%s\n' \
+                "$*" $errno "${where[2]:0:-1}" "${where[0]}" >&$errfd
+        kill -s SIGUSR1 $sigpid
+        exit 1
+}
+
+die_if() {
+        (( $1 != 0 )) || return
+        shift
+        die $1 1 "$@"
+}
+
+# User error
+fail() {
+        echo "$@" >&$stderr
+        kill -s SIGUSR1 $sigpid
+        exit 1
+}
+
+# Try to run something, die if it fails
+try() {
+        "$@" || die $? 1 "$@"
+}
+
+# Names:
+#
+# Variable Names for package parts
+# 
+# pkgname: the name of the package, without version or release information
+# pkgver: the version of a package
+# pkgrel: the release of a pkgnv (allow security patching without pkgver change)
+# pkgspec: <pkgname>-<pkgver>-<pkgrel>
+#
+#
+# Variable Names for spkg directories
+#
+# libdir: /var/lib/spkg
+# builddir: /var/lib/spkg/build
+# pkgdir: /var/lib/spkg/pkg
+# installdir: /spkg (can be changed in /etc/spkg.conf)
+# srccachedir: /sources (can be changed in /etc/spkg.conf)
+#
+# sysroot: a directory root for the file system being managed
+#          empty in final system, $LFS in a Linux from Scratch pre-chroot system
+#
+# libroot, buildroot, pkgroot, installroot: 
+#       as with the dirs above but prefixed with sysroot
+#
+# Note: In install/uninstall functions $pkgdir is often used to refer to the
+# directory where the package files are installed rather than /var/lib/spkg/pkg,
+# the context is usually clear.
+#
+#
+# Variable Names for package files
+#
+# pkgfile: a file from a package that will be symlinked
+# userfile: a file from a package that will be copied
+#
+# installedfile: a pkgfile or userfile in installroot/<pkgname>/
+# targetfile: a pkgfile in the package installdir/<pkgname>/
+# linkfile: a pkgfile in the real file system, symlinked to a targetfile
+# sysfile: a file in the real system, may be a linkfile or a userfile
+
 
 info() {
         echo "$*"
@@ -31,91 +117,34 @@ log() {
         echo "[$(date -Iseconds)] $*" >> "$logfile"
 }
 
-trace() {
-        echo "$*" >> "$tracefile"
+source_file() { 
+        pushd . > /dev/null
+        try source "$@"
+        popd > /dev/null
 }
 
-pushd() {
-        builtin pushd "$@" > /dev/null
-}
 
-popd() {
-        builtin popd >/dev/null
-}
-
-source() { 
-        {
-                pushd .
-                builtin source "$@"
-                popd
-        } || fail "source $*"
-}
-
-trace_rm() {
-        rm -v "$@" >> "$tracefile" || fail "rm $*"
-}
-
-trace_rmdir() {
-        rmdir -v --ignore-fail-on-non-empty "$@" >> $tracefile ||
-                fail "rmdir $*"
-}
-
-trace_cp() {
-        cp -v "$@" >> "$tracefile" || fail "cp $*"
-}
-
-trace_mkdir_m() {
-        mkdir -vm "${1:?}" "${2:?}" >> "$tracefile" || fail "mkdir -m $*"
-}
-
-trace_ln_sft() {
-        ln -vsf -t "$@" >> "$tracefile" || fail "ln -sf -t $*"
+require() {
+        declare -gA require_done
+        local lib
+        for lib; do
+                [[ ! ${require_done[$lib]} ]] || continue
+                source_file "$requireroot/$lib.sh"
+                require_done[$lib]=1
+        done
 }
 
 has_permission() {
         [[ -w "$installroot" ]]
 }
 
-is_fn() {
-        test "$(type -t "$1")" = function
-}
-
 call_fn() {
-        if is_fn "$1"; then
-                if ! "$@" >> "$logfile" ; then
-                        fail "function $1" 
-                fi
-        fi
+        [[ "$(type -t "$1")" == function ]] || return
+        try "$@"
 }
 
 parse_pkgspec() {
         [[ $1 =~ ^.+-([^-]+)-[0-9]+ ]]
-}
-
-# Print location of sysroot dependent <package> tar file
-pkgtarfile() {
-        echo "$pkgroot/${1:?}-$pkgsuffix"
-}
-
-# Print location of sysroot dependent <package> <file>
-pkgrootfile() {
-        echo "$installroot/${1:?}/${2:?}"
-}
-
-# Print location of sysroot dependent <package> <meta file>
-pkgmetafile() {
-        pkgrootfile "${1:?}" ".spkg/${2:?}"
-}
-
-# Print location of sysroot dependent <installed file> 
-targetfile() {
-        echo "$sysroot/${1:?}"
-}
-
-# Print location of <package> <file> in final, no sysroot, system
-# Used as link target for installed files
-finalpkgfile() {
-        echo "$installdir/${1:?}/${2:?}"
 }
 
 pkgfiles() {
@@ -129,399 +158,68 @@ pkgfiles() {
 
 # Print package spec of installed version of <package name>
 installed_pkg() {
-        local ipath ipaths
+        local pkgname=${1:?}
+        local pkgspec="$installroot/$pkgname/.spkg/pkgspec"
 
-        readarray -t ipaths < <(pkgfiles "$installroot/${1:?}")
-        ipath="${ipaths[0]}"
-
-        if [[ $ipath ]]; then
-                echo "${ipath##*/}"
+        if [[ -f $pkgspec ]]; then
+                cat "$pkgspec"
         fi
 }
 
 # Success if <package spec> is installed
 is_installed() {
-        [[ -d "$installroot/${1:?}" ]]
+        local pkgspec=${1:?}
+        local pkgname=${pkgspec%-*-*}
+        local pkgdir="$installroot/$pkgname"
+
+        [[ -d "$pkgdir" && $pkgspec == "$(cat "$pkgdir/.spkg/pkgspec")" ]]
 }
 
 # Print package specs that match args sorted by name and version number
 # If first argument is '-r' then reverse sort
 versort() {
-        local args
+        local args='-bdv'
 
         # Using output of ls in scripts is problematic but we want to use version sorting
         # And package names shouldn't contain newlines and other odd characters
-        args='-bdv'
         if [[ $1 == '-r' ]]; then
                 args+='r'
                 shift
         fi
 
-        ls "$args" "$@" 2>/dev/null
+        try ls "$args" "$@" 2>/dev/null
 }
 
-# Print package spec the <package name> with the highest version number
+# Print package spec of the <package name> with the highest version number
 latest_pkg() {
-        local pkg tars
+        local pkgname=${1:?}
+        local tars
 
-        pkg=${1:?}
         # Extract package spec from full path listing of tar files
         # Latest version will be sorted to the bottom
 
-        readarray tars < <(pkgfiles "$pkgroot/$pkg")
-
+        try readarray tars < <(pkgfiles "$pkgroot/$pkgname")
         if (( ${#tars[@]} )); then
                 versort "${tars[@]}" | 
-                        sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" | 
-                        tail -n 1
+                        try sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" | 
+                        try tail -n 1
         fi
 }
 
 confirm () {
-        read -p "$1" -n 1 -r
-        echo
+        try read -p "$1" -n 1 -r
+        try echo
         [[ ${REPLY,,} =~ ^(|"$2")$ ]]
 }
 
 confirm_pkgs() {
-        local prompt def
-
-        prompt=${1:?}
-        def=${2:?}
+        local prompt=${1:?}
+        local def=${2:?}
         shift 2
 
-        printf "Selected packages:\n\n"
-        printf "%s\n\n" "$*"
+        try printf "Selected packages:\n\n"
+        try printf "%s\n\n" "$*"
         confirm "$prompt" "$def"
-}
-
-check_install_permissions() {
-        local npkg opkg tgtfile dir link ok
-
-        npkg=${1:?}
-        shift
-        while read -r file; do
-                tgtfile="$sysroot/${file#*/}"
-                dir="${tgtfile%/*}"
-                if [[ -d $dir ]]; then
-                        [[ -w $dir ]] || fail "no write permission: $dir"
-                        if [[ -h $tgtfile ]]; then
-                                link="$(readlink "$tgtfile")"
-                                ok=''
-                                if (( $# )); then
-                                        for opkg; do
-                                                if [[ $link =~ ^$installdir/$opkg ]]; then
-                                                        ok=1
-                                                        break
-                                                fi
-                                        done
-                                else
-                                        # will happen with install -f
-                                        if [[ $link =~ ^$installdir/$npkg ]]; then
-                                                ok=1
-                                        fi
-                                fi
-                                [[ $ok ]] ||
-                                        fail "install file is not owned by this package: $tgtfile" 
-                        fi
-                fi
-        done < <(tar -taf "$(pkgtarfile "$npkg")" --exclude=.spkg)
-
-        for opkg; do
-                check_uninstall_permissions "$opkg"
-        done
-}
-
-check_uninstall_permissions() {
-        local opkg tgtfile dir
-
-        opkg=${1:?}
-
-        while read -r -d '' file; do
-                tgtfile="$sysroot/$file"
-                dir="${tgtfile%/*}"
-                if [[ -d $dir ]]; then
-                        [[ -w $dir ]] || fail "no write permission: $dir"
-                        if [[ -h $tgtfile ]]; then
-                                link="$(readlink "$tgtfile")"
-                                [[ $link =~ ^$installdir/$opkg ]] ||
-                                        fail "uninstall file is not owned by this package: $tgtfile : $link"
-                        fi
-                fi
-        done < <(find "$installroot/$opkg" -name .spkg -prune -o -type l,f -printf '%P\0')
-}
-
-# Install package files for <package spec> as symlinks back to the installdir
-#
-# Required target directories have already been created by install_reqdirs
-#
-# Taking note of the LFS Book's warnings about upgrading glibc this 
-# creates all files in a given directory in one command
-#
-# ln -sf -t <target dir> <non-chroot installdir>{file1,file2,file3,...}
-#
-# Implementation looks a bit ugly but I tried other ways of doing it
-# - install wont install symlinks
-# - cp -a and tar/untar allow a single command to install all files
-#   in one command, which is great, but they may change the file mode
-#   of existing directories - which should never be done (IMHO)
-#   cp -a even changes directory ownership of existing directories!
-#
-# Pre-chroot the links will be broken but will be ok once chrooted
-install_pkgfiles() {
-        local pkg files ndir odir file fdir
-
-        pkg=${1:?}
-        files=()
-        odir=''
-        while IFS= read -r file; do
-                ndir="${file%/*}"
-                if [[ $ndir != "$odir" ]]; then
-                        if (( ${#files[@]} )); then
-                                fdir="$(finalpkgfile "$pkg" "$odir")"
-                                files=( $(printf "$fdir/%s\n" "${files[@]}") )
-                                trace_ln_sft \
-                                        "$(targetfile "$odir")" \
-                                        "${files[@]}"
-                        fi
-                        odir="$ndir"
-                        files=()
-                fi
-                files+=( "${file##*/}" )
-        done < <(echo "***EOF***" | cat "$(pkgmetafile "$pkg" 'pkgfiles')" -)
-}
-
-# Uninstall package files for <package spec> if they still link to the
-# package being uninstalled.  
-uninstall_pkgfiles() {
-        local pkg f tgt
-
-        pkg=${1:?}
-        while IFS= read -r f; do
-                tgt="$(targetfile "$f")"
-                if [[ "$(readlink "$tgt")" == "$(finalpkgfile "$pkg" "$f")" ]]; then
-                        trace_rm "$tgt"
-                fi
-        done < "$(pkgmetafile "$pkg" 'pkgfiles')"
-}
-
-# Capture any required dirs that we will create on install
-# for potential removal when package is uninstalled
-#
-# Create any missing dirs one by one so we can set correct permissions
-# 
-# When replacing packages retain any dirs in replaced pkgdirs files
-# as these dirs cannot be removed yet as the new package will be in place
-install_reqdirs() {
-        local npkg opkg d pkgdirs tmpdirs tdir mode
-
-        npkg=${1:?}
-        shift
-
-        pkgdirs="$(pkgmetafile "$npkg" 'pkgdirs')"
-        tmpdirs="$(pkgmetafile "$npkg" 'tmpdirs')"
-
-        while IFS= read -r d; do
-                tdir="$(targetfile "$d")"
-                if [[ ! -d "$tdir" ]]; then
-                        printf "%s\n" "$d"
-                        mode="$(stat -c%a "$(pkgrootfile "$npkg" "$d")")"
-                        trace_mkdir_m "$mode" "$tdir"
-                fi
-        done \
-                < "$(pkgmetafile "$npkg" 'reqdirs')" \
-                > "$pkgdirs"
-
-        for opkg; do
-                mv "$pkgdirs" "$tmpdirs"
-                cat "$tmpdirs" \
-                    "$(pkgmetafile "$opkg" 'pkgdirs')" |
-                    uniq > "$pkgdirs"
-                rm "$tmpdirs"
-        done
-
-}
-
-# Only call if this is a real uninstall rather than an upgrade
-# Uninstall any directories that this <package spec>
-# created when installed and are now empty
-uninstall_pkgdirs() {
-        local d pkg
-
-        pkg=${1:?}
-        # Remove in reverse order, for example a/b before a
-        for d in $(tac "$(pkgmetafile "$pkg" 'pkgdirs')"); do
-                trace_rmdir "$(targetfile "$d")"
-        done
-}
-
-# Install user files for <package spec>, 
-# <other package specs..> are being uninstalled
-install_userfile() {
-        local f npkg opkg nfile ufile ofile 
-
-        f=${1:?}
-        npkg=${2:?}
-        shift 2
-
-        nfile="$(pkgrootfile "$npkg" "$f")"
-        ufile="$(targetfile "$f")"
-
-        # If user file does not exist, copy in new one
-        if [[ ! -f "$ufile" ]]; then
-                trace_cp "$nfile" "$ufile"
-                return
-        fi
-
-        # If new file = user file, no change required
-        if cmp -s "$nfile" "$ufile"; then
-                return
-        fi
-
-        # Look for previous installed version of file
-        # If new file = old file, leave the user file in place 
-        # If user file = old file, replace with new file
-        for opkg ; do
-                ofile="$(pkgrootfile "$opkg" "$f")"
-                if [[ -e $ofile ]]; then
-                        if cmp -s "$nfile" "$ofile"; then
-                                return
-                        fi
-                        if cmp -s "$ufile" "$ofile"; then
-                                trace_cp "$nfile" "$ufile"
-                                return
-                        fi
-                fi
-        done
-
-        # We have a clash so copy in the new file with .spkgnew suffix 
-        trace_cp "$nfile" "$(targetfile "$f.spkgnew")"
-}
-
-install_userfiles() {
-        local npkg f
-
-        npkg=${1:?}
-        shift
-        while IFS= read -r f; do
-                install_userfile "$f" "$npkg" "$@"
-        done < "$(pkgmetafile "$npkg" 'userfiles')"
-}
-
-# Only call if this is real uninstall rather than upgrade
-# Uninstalling <package spec>, remove userfile if unchanged since installation
-uninstall_userfile() {
-        local f pkg
-
-        f=${1:?}
-        pkg=${2:?}
-        if cmp -s "$(pkgrootfile "$pkg" "$f")" "$(targetfile "$f")"; then
-                trace_rm "$(targetfile "$f")"
-        fi
-}
-
-# Only call if this is real uninstall rather than upgrade
-uninstall_userfiles() {
-        local pkg f
-
-        pkg=${1:?}
-        while IFS= read -r f; do
-                uninstall_userfile "$f" "$pkg"
-        done < "$(pkgmetafile "$pkg" 'userfiles')"
-}
-
-pre_install_pkg() {
-        local npkg
-        # shellcheck disable=SC2034 # maybe defined in sourced file
-        local pre_install post_install pre_uninstall post_uninstall
-
-        npkg=${1:?}
-
-        tar xaf "$(pkgtarfile "$npkg")" -C "$installroot"
-
-        # shellcheck disable=SC1090 # package supplied file
-        source "$(pkgmetafile "$npkg" 'upgradefns')"
-
-        call_fn pre_install "$@"
-}
-
-post_install_pkg() {
-        local npkg
-        # shellcheck disable=SC2034 # maybe defined in sourced file
-        local pre_install post_install pre_uninstall post_uninstall
-
-        npkg=${1:?}
-
-        # shellcheck disable=SC1090 # package supplied file
-        source "$(pkgmetafile "$npkg" 'upgradefns')"
-
-        call_fn post_install "$@"
-}
-
-pre_uninstall_pkg() {
-        local opkg npkg
-        # shellcheck disable=SC2034 # maybe defined in sourced file
-        local pre_install post_install pre_uninstall post_uninstall
-
-        opkg=${1:?}
-        npkg=$2
-
-        # shellcheck disable=SC1090 # package supplied file
-        source "$(pkgmetafile "$opkg" 'upgradefns')"
-
-        call_fn pre_uninstall "$opkg" "$npkg"
-}
-
-post_uninstall_pkg() {
-        local opkg npkg
-        # shellcheck disable=SC2034 # maybe defined in sourced file
-        local pre_install post_install pre_uninstall post_uninstall
-
-        opkg=${1:?}
-        npkg=$2
-
-        # shellcheck disable=SC1090 # package supplied file
-        source "$(pkgmetafile "$opkg" 'upgradefns')"
-
-        call_fn post_uninstall "$opkg" "$npkg"
-
-        # Remove installed package directory
-        rm -r "${installroot:?}/$opkg"
-
-        # Move build and package files to old 
-        mv "$(pkgtarfile "$opkg")" "$oldroot/pkg"
-        mv "$buildroot/$opkg" "$oldroot/build"
-}
-
-# Install <package spec>, 
-# <package specs being replaced ...> are needed for correct handling of userfiles
-install_pkg() {
-        local npkg
-
-        npkg=${1:?}
-
-        install_reqdirs "$@"
-        install_pkgfiles "$npkg"
-        install_userfiles "$@"
-
-}
-
-# Uninstall <package spec>, optional <package spec> of package that is replacing it
-# Only uninstall userfiles and pkgdirs if package is not being replaced
-uninstall_pkg() {
-        local opkg npkg
-
-        opkg=${1:?}
-        npkg=$2
-
-        info "removing: $opkg"
-
-        uninstall_pkgfiles "$opkg" "$npkg"
-
-        if [[ ! $npkg ]]; then
-                uninstall_userfiles "$opkg"
-                uninstall_pkgdirs "$opkg"
-        fi
 }
 
 # Options:
@@ -530,15 +228,14 @@ uninstall_pkg() {
 #   -p package previously built files to package repository
 # Args: single package spec
 build_command() {
-        local opt opt_check opt_build_only opt_package_only
-        local pkg pkgdir builddir pkgfile i srcdir src md5 url
-        # declare variables that should be set by $buildfile
-        declare -a sources md5sums userfiles replaces
-        local pkgname pkgver pkgrel 
-        # shellcheck disable=SC2034 # maybe defined in $buildfile
-        local build check package 
-        # shellcheck disable=SC2034 # maybe defined in $buildfile
-        local pre_install post_install pre_uninstall post_uninstall
+        require 'build'
+
+        local pkgspec=$1
+        local opt_check=0
+        local opt_build_only=0
+        local opt_package_only=0
+
+        parse_pkgspec "$pkgspec" || fail "invalid package spec $pkgspec"
 
         info "executing: spkg build $*"
 
@@ -556,167 +253,29 @@ build_command() {
                 fail "cannot use option -p with -b or -c"
         fi
 
-        pkg=$1
-        parse_pkgspec "$pkg" || fail "invalid package name $pkg"
+        build_pkg "$pkgspec" $opt_check $opt_build_only $opt_package_only >&$outfd
 
-        builddir=$buildroot/$pkg
-        pkgfile=$(pkgtarfile "$pkg")
-        srcdir=$builddir/src
-        pkgdir=$builddir/pkg/$pkg
-
-        [[ ! -f $pkgfile ]] || fail "package already exists $pkgfile"
-        [[ -d $builddir ]] || fail "missing build directory $builddir"
-        [[ -f $builddir/$buildfile ]] || fail "missing $buildfile in build directory $builddir"
-
-        cd "$builddir"
-        
-        # defaults, can be added to or overridden by $buildfile
-        userfiles=("/etc/*")
-        replaces=("${pkg%-*-*}")
-
-        # shellcheck disable=SC1090 # package supplied build file
-        source "$buildfile"
-
-        [[ "$pkg" == "$pkgname-$pkgver-$pkgrel" ]] || fail "build is not for $pkg"
-
-        if [[ ! $opt_package_only ]]; then
-
-                (( ${#sources[@]} == "${#md5sums[@]}" )) || fail "wrong number of md5sums $pkg" 
-
-                [[ -d src ]] && rm -rf src
-                [[ -d pkg ]] && rm -rf pkg
-
-                mkdir src
-                mkdir -p "pkg/$pkg"
-
-                for i in "${!sources[@]}"; do
-                        src=${sources[$i]}
-                        md5=${md5sums[$i]}
-                        if [[ $src =~ ^https:// ]]; then
-                                url=$src
-                                src=$srcroot/${url##*/}
-                                if [[ ! -f "$src" ]]; then
-                                        if command -v curl; then
-                                                curl -O --output-dir "$srcroot" "$url"
-                                        elif command -v wget; then
-                                                wget -P "$srcroot" "$url"
-                                        fi
-                                fi
-                        elif [[ $src =~ ^/ ]]; then
-                                src=${sysroot}$src
-                        else
-                                src=$srcroot/$src
-                        fi
-
-                        [[ -f $src ]] || fail "source not found $src"
-                        [[ $(md5sum "$src") == "$md5  $src" ]] || fail "incorrect md5sum for $src"  
-
-                        # only untar the first source file
-                        if (( i )) || ! tar xaf "$src" -C src 2>/dev/null; then
-                                cp -r "$src" src
-                        fi
-                done
-
-                cd "$srcdir"
-                call_fn build
-                if [[ $opt_check ]]; then
-                        call_fn check
-                fi
-                call_fn package
+        if (( $opt_build_only )); then
+                info "package built $pkgspec"
         else
-                if [[ ! ( -d $srcdir && -d $pkgdir ) ]]; then
-                        fail "cannot add package, package not built"
-                fi
-        fi
-
-        if [[ ! $opt_build_only ]]; then
-                cd "$pkgdir"
-
-                # sanity check, symlinks must not point back into spkg directories
-                while IFS= read -r -d '' link; do
-                        if [[ $(readlink "$link") =~ $libdir ]]; then
-                                fail "cannot package: '${link#"$pkgdir"/}' is a symlink into ${libdir:1}"
-                        fi
-                done < <(find "$pkgdir" -type l -print0)
-
-                # Try and spot other references to spkg directories
-                # Except spkg package of course!
-                if [[ $pkgname != 'spkg' ]] && grep -r "$libdir" > /dev/null; then
-                        warn "some package files contain references to ${libdir:1}"
-                fi
-
-                mkdir .spkg
-
-                {
-                        for fn in pre_install post_install pre_uninstall post_uninstall; do
-                                type $fn 2> /dev/null | tail -n +2
-                        done
-                } > .spkg/upgradefns
-
-                {
-                        for f in "${userfiles[@]}"; do
-                                [[ ${f::1} == '/' ]] || fail "userfiles must be absolute paths"
-                                find . -path ".$f" -type f -printf "%P\n"
-                        done
-                } > .spkg/userfiles
-
-                # turn on dotglob so we get ALL files and dirs
-                shopt -s dotglob
-                find -- * -name .spkg -prune -o -type f -print |
-                        grep -vxFf .spkg/userfiles > .spkg/pkgfiles
-                find -- * -name .spkg -prune -o -type d -print > .spkg/reqdirs
-                shopt -u dotglob
-                
-                touch .spkg/pkgdirs
-                printf '%s\n' "${replaces[@]}" > .spkg/replaces
-
-                cd "$builddir"
-
-                tar caf "$pkgfile" -C "$builddir/pkg" "$pkg"
-
-                rm -rf src pkg
-
-                info "package added $pkg"
-        else
-                info "package built $pkg"
+                ingo "package added $pkgspec"
         fi
 }
 
 # Print package specs of packages that install of <package spec> should remove
 pkg_replaces() {
-        local pkg rep
-
-        pkg=${1:?}
+        local pkgspec=${1:?}
+        local rep
 
         # we need to look at .spkg/replaces file before installing
-        while read -r rep; do
+        while try read -r rep; do
                 installed_pkg "$rep"
-        done < <(tar xOf "$(pkgtarfile "$pkg")" "$pkg/.spkg/replaces")
-
-}
-
-# Install <package spec> (already checked package exists and is not installed)
-# Uninstalls any installed packages that are being replaced
-install_pkg_command() {
-        local opkgs npkg
-
-        npkg=${1:?}
-        readarray -t opkgs < <(pkg_replaces "$npkg")
-
-        check_install_permissions "$npkg" "${opkgs[@]}"
-
-        pre_install_pkg "$npkg" "${opkgs[@]}"
-        install_pkg "$npkg" "${opkgs[@]}"
-        post_install_pkg "$npkg" "${opkgs[@]}"
-
-        for opkg in "${opkgs[@]}"; do
-                pre_uninstall_pkg "$opkg" "$npkg"
-                uninstall_pkg "$opkg" "$npkg"
-                post_uninstall_pkg "$opkg" "$npkg"
-        done
+        done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
 }
 
 install_command() {
+        require 'install'
+
         declare -a pkgs
         local p n f opt_yes opt_force
 
@@ -733,7 +292,7 @@ install_command() {
         done
         shift $(( OPTIND - 1 ))
 
-        cd "$pkgroot"
+        try cd "$pkgroot"
 
         if (( $# == 0 )); then
                 # Reverse sort by name and version, take first (most recent version)
@@ -759,7 +318,7 @@ install_command() {
                                                 # forceable reinstall
                                                 # no idea of the state things are in
                                                 # so remove package installdir and try again
-                                                rm -r "${installroot:?}/$p"
+                                                try rm -r "${installroot:?}/$p"
                                         else
                                                 fail "package $p is already installed, use install -f to force reinstall"
                                         fi
@@ -786,19 +345,9 @@ install_command() {
         fi
 }
 
-uninstall_pkg_command() {
-        local pkg
-
-        pkg=$1
-
-        check_uninstall_permissions "$pkg"
-
-        pre_uninstall_pkg "$pkg"
-        uninstall_pkg "$pkg"
-        post_uninstall_pkg "$pkg"
-}
-
 uninstall_command() {
+        require 'uninstall'
+
         declare -a pkgs
         local p opt_yes
 
@@ -823,7 +372,7 @@ uninstall_command() {
                         fi
                 else 
                         # should only ever be 0 or 1
-                        read -r -d '' p < <(find $installroot -name "$p-*" -print0)
+                        try read -r -d '' p < <(try find $installroot -name "$p-*" -print0)
                         if [[ $p ]]; then
                                 pkgs+=( "${p##*/}" )
                         fi
@@ -842,46 +391,10 @@ uninstall_command() {
         fi
 }
 
-list_dir_command() {
-        local pkg m
-
-        cd "$buildroot"
-
-        for pkg in $(versort "$1"* 2>/dev/null); do
-                if [[ -f $pkgroot/$pkg-$pkgsuffix ]]; then
-                        if is_installed "$pkg"; then
-                                m='*'
-                        else
-                                m='+'
-                        fi
-                else
-                        m=' '
-                fi
-
-                printf '%s %s\n' "$m" "$pkg"
-        done
-}
-
-list_pkg_command() {
-        local pkg m
-
-        cd "$pkgroot"
-
-        for pkg in $(versort "$1"*"-$pkgsuffix" 2>/dev/null); do
-                pkg=${pkg%-"$pkgsuffix"}
-
-                if is_installed "$pkg"; then
-                        m="*"
-                else
-                        m=" "
-                fi
-
-                printf "%s %s\n" "$m" "$pkg"
-        done
-}
-
 list_command() {
-        local opt_dir
+        require 'list'
+
+        local opt opt_dir
         
         while getopts ":d" opt; do
                 case $opt in
@@ -903,65 +416,14 @@ usage() {
         echo "       $(basename "$0") --help"
 }
 
-help() {
-        cat << EOF
-Simple Package Manager
-
-A package spec is made up of <package name>-<version>-<release>
-
-Usage: $(basename "$0") [command] [options] [args]
-
-Command: build
-Options: -c = run check function (default is to skip checks)
-         -b = build but do not create package
-         -p = if alreay built, create package
-Args: Package spec
-
-Uses $buildroot/<package spec>/$buildfile to create the package.
-Once built the install files are tarred and added to the package repository as $pkgroot/<package spec>.$pkgsuffix
-
-
-Command: install
-Options: -y = do not prompt for confirmation to install
-         -f = force reinstallation of package
-Args: Zero or more package names or specs
-
-Installs one or more packages.  Previously installed versions will be uninstalled prior to installation.
-
-A package name will match the spec with the highest built version number, if that spec is not currently installed.    
-A package spec must match a package that is not currently installed (unless option -f is given).
-With no arguments the package names of all available packages will be used.
-
-
-Command: uninstall
-Options: -y = do not prompt for confirmation to uninstall
-Args: One or more package names or specs
-
-Uninstalls one or more packages.
-
-A package name will match the currently installed version.
-A package spec must match the currently installed version.
-
-
-Command: list
-Options: -d = list build directories rather than packages
-Args: Zero or one partial or full package spec
-
-Displays a list of all package specs that match the partial spec (as regex partial*).
-Installed packages will be prefixed by an asterisk, others a space.
-
-If option -d is specified build directories will be searched for package specs to list.
-Build directories that have not been built will be prefixed by ' ', those that have by '+' or '*' if the built package is installed.
-
-
-Command: <no command>
-Options: -v or --version = Display the current version number
-         -h or --help = Display this help text
-EOF
+help_command() {
+        require 'help'
+        show_help
 }
 
 run_command() {
-        cmd=$1
+        local cmd=$1
+
         (( $# == 0 )) || shift
         case "$cmd" in
                 build )          build_command "$@" ;;
@@ -969,22 +431,21 @@ run_command() {
                 uninstall )      uninstall_command "$@" ;;
                 list )           list_command "$@" ;;
                 -v|--version )   info "$(basename "$0") $version" ;;
-                -h|--help|help ) help ;;
+                -h|--help|help ) help_command ;;
                 "" )             usage ;;
                 * )              fail "invalid command: $cmd" ;;
         esac
 }
 
-version=0.0.1
-
 libdir=/var/lib/spkg
+logdir=/var/log/spkg
+requiredir=/usr/share/spkg/lib
 installdir=/spkg
 srccache=/sources
 pkgsuffix="x86_64.spkg.tar.gz"
 
 if [[ -f "$prefix/etc/spkg.conf" ]]; then
-        # shellcheck disable=SC1091 # configuration file
-        source "$prefix/etc/spkg.conf"
+        source_file "$prefix/etc/spkg.conf"
 fi
 
 libroot=${sysroot}$libdir
@@ -993,12 +454,16 @@ oldroot=$libroot/old
 buildroot=$libroot/build
 buildfile=SPKGBUILD
 
+logroot=${sysroot}$logdir
+requireroot=${sysroot}$requiredir
+
 installroot=${sysroot}$installdir
 srcroot=${sysroot}$srccache
 
-logfile=${sysroot}/var/log/spkg/spkg.log
-tracefile=${sysroot}/var/log/spkg/trace.log
-command mkdir -p "${logfile%/*}"
-rm -f "$tracefile"
+logfile=${logroot}/spkg.log
+tracefile=${logroot}/trace.log
+
+try mkdir -p "${logfile%/*}"
+try rm -f "$tracefile"
 
 run_command "$@"

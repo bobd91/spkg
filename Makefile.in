@@ -8,4 +8,6 @@ install:
 	install -m 644 spkg.conf $(DESTDIR)SPKG_prefix/etc
 	install -d $(DESTDIR)SPKG_prefix/usr/share/spkg
 	install -m 644 spkg.bash $(DESTDIR)SPKG_prefix/usr/share/spkg
+	install -d $(DESTDIR)SPKG_prefix/usr/share/spkg/lib
+	install -m 644 lib/*.sh $(DESTDIR)SPKG_prefix/usr/share/spkg/lib
 	install -d $(DESTDIR)SPKG_prefix/var/log/spkg
