@@ -20,12 +20,11 @@ sysroot=SPKG_with_sysroot
 prefix=SPKG_prefix
 version=SPKG_version
 
+# Error handling
+
 set -E
 trap abort SIGUSR1
 sigpid=$$
-
-exec {stdout} >&1
-exec {stderr} >&2
 
 abort() {
         printf 'Aborting...\n' >&2
@@ -40,20 +39,19 @@ die() {
         readarray -d ' ' -t where < <(caller $level)
         shift 2
         printf '%s => failed(%s) at %s:%s\n' \
-                "$*" $errno "${where[2]:0:-1}" "${where[0]}" >&$errfd
+                "$*" $errno "${where[2]:0:-1}" "${where[0]}" >&2
         kill -s SIGUSR1 $sigpid
         exit 1
 }
 
 die_if() {
         (( $1 != 0 )) || return
-        shift
         die $1 1 "$@"
 }
 
 # User error
 fail() {
-        echo "$@" >&$stderr
+        echo "$@" >&2
         kill -s SIGUSR1 $sigpid
         exit 1
 }
@@ -63,58 +61,36 @@ try() {
         "$@" || die $? 1 "$@"
 }
 
-# Names:
-#
-# Variable Names for package parts
-# 
-# pkgname: the name of the package, without version or release information
-# pkgver: the version of a package
-# pkgrel: the release of a pkgnv (allow security patching without pkgver change)
-# pkgspec: <pkgname>-<pkgver>-<pkgrel>
-#
-#
-# Variable Names for spkg directories
-#
-# libdir: /var/lib/spkg
-# builddir: /var/lib/spkg/build
-# pkgdir: /var/lib/spkg/pkg
-# installdir: /spkg (can be changed in /etc/spkg.conf)
-# srccachedir: /sources (can be changed in /etc/spkg.conf)
-#
-# sysroot: a directory root for the file system being managed
-#          empty in final system, $LFS in a Linux from Scratch pre-chroot system
-#
-# libroot, buildroot, pkgroot, installroot: 
-#       as with the dirs above but prefixed with sysroot
-#
-# Note: In install/uninstall functions $pkgdir is often used to refer to the
-# directory where the package files are installed rather than /var/lib/spkg/pkg,
-# the context is usually clear.
-#
-#
-# Variable Names for package files
-#
-# pkgfile: a file from a package that will be symlinked
-# userfile: a file from a package that will be copied
-#
-# installedfile: a pkgfile or userfile in installroot/<pkgname>/
-# targetfile: a pkgfile in the package installdir/<pkgname>/
-# linkfile: a pkgfile in the real file system, symlinked to a targetfile
-# sysfile: a file in the real system, may be a linkfile or a userfile
+# Try and trace output
+trace() {
+        "$@" >> "$tracefile" || die $? 1 "$@"
+}
 
+
+# Logging functions
 
 info() {
-        echo "$*"
+        try echo "$*"
         log "[Info]" "$@"
 }
 
 warn() {
-        echo "Warning: $*"
+        try echo "Warning: $*"
         log "[Warning]" "$@" 
 }
 
 log() {
-        echo "[$(date -Iseconds)] $*" >> "$logfile"
+        local t
+        try printf -v t '%(%F %T %z)T'
+        try printf '[%s] %s\n' "$t" "$*" >> "$logfile"
+}
+
+
+# General utility functions
+
+usage() {
+        try echo "Usage: $(basename "$0") command arg"
+        try echo "       $(basename "$0") --help"
 }
 
 source_file() { 
@@ -134,78 +110,6 @@ require() {
         done
 }
 
-has_permission() {
-        [[ -w "$installroot" ]]
-}
-
-call_fn() {
-        [[ "$(type -t "$1")" == function ]] || return
-        try "$@"
-}
-
-parse_pkgspec() {
-        [[ $1 =~ ^.+-([^-]+)-[0-9]+ ]]
-}
-
-pkgfiles() {
-        local files
-        shopt -s nullglob
-        files=( "${1:?}"-[0-9][0-9\.-]* )
-        shopt -u nullglob
-        if (( ${#files[@]} )); then
-                echo "${files[@]}"
-        fi
-}
-
-# Print package spec of installed version of <package name>
-installed_pkg() {
-        local pkgname=${1:?}
-        local pkgspec="$installroot/$pkgname/.spkg/pkgspec"
-
-        if [[ -f $pkgspec ]]; then
-                try cat "$pkgspec"
-        fi
-}
-
-# Success if <package spec> is installed
-is_installed() {
-        local pkgspec=${1:?}
-        local pkgname=${pkgspec%-*-*}
-
-        [[ $pkgspec == "$(installed_pkg "$pkgname")" ]]
-}
-
-# Print package specs that match args sorted by name and version number
-# If first argument is '-r' then reverse sort
-versort() {
-        local args='-bdv'
-
-        # Using output of ls in scripts is problematic but we want to use version sorting
-        # And package names shouldn't contain newlines and other odd characters
-        if [[ $1 == '-r' ]]; then
-                args+='r'
-                shift
-        fi
-
-        try ls "$args" "$@" 2> /dev/null
-}
-
-# Print package spec of the <package name> with the highest version number
-latest_pkg() {
-        local pkgname=${1:?}
-        local tars
-
-        # Extract package spec from full path listing of tar files
-        # Latest version will be sorted to the bottom
-
-        try readarray tars < <(pkgfiles "$pkgroot/$pkgname")
-        if (( ${#tars[@]} )); then
-                versort "${tars[@]}" | 
-                        try sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" | 
-                        try tail -n 1
-        fi
-}
-
 confirm () {
         try read -p "$1" -n 1 -r
         try echo
@@ -222,6 +126,134 @@ confirm_pkgs() {
         confirm "$prompt" "$def"
 }
 
+call_fn() {
+        [[ "$(type -t "$1")" == function ]] || return
+        try "$@"
+}
+
+# Package utility functions
+
+has_permission() {
+        [[ -w "$installroot" ]]
+}
+
+parse_pkgspec() {
+        [[ $1 =~ ^.+-([^-]+)-[0-9]+ ]]
+}
+
+pkgfiles() {
+        local files
+        shopt -s nullglob
+        files=( "${1:?}"-[0-9][0-9\.-]* )
+        shopt -u nullglob
+        if (( ${#files[@]} )); then
+                try printf '%s\n' "${files[@]}"
+        fi
+}
+
+# Print package spec of installed version of <package name>
+installed_pkg() {
+        local pkgname=${1:?}
+        local pkgspec="$installroot/$pkgname/.spkg/pkgspec"
+
+        if [[ -f $pkgspec ]]; then
+                try cat "$pkgspec"
+        fi
+}
+
+# Success if <package spec> is installed
+is_installed() {
+        local pkgspec=${1:?}
+        local pkgname="${pkgspec%-*-*}"
+
+        [[ $pkgspec == "$(installed_pkg "$pkgname")" ]]
+}
+
+# Print package specs that match args sorted by name and version number
+# If first argument is '-r' then reverse sort
+versort() {
+        local args='-bdv'
+
+        # Using output of ls in scripts is problematic but we want to use version sorting
+        # And package names shouldn't contain newlines and other odd characters
+        if [[ $1 == '-r' ]]; then
+                args+='r'
+                shift
+        fi
+
+        ls "$args" "$@" 2> /dev/null
+}
+
+# Print package spec of the <package name> with the highest version number
+latest_pkg() {
+        local pkgname=${1:?}
+        declare -a tars
+
+        # Extract package spec from full path listing of tar files
+        # Latest version will be sorted to the bottom
+        try readarray -t tars < <(pkgfiles "$pkgroot/$pkgname")
+        if (( ${#tars[@]} )); then
+                versort "${tars[@]}" | 
+                        try sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" | 
+                        try tail -n 1
+        fi
+}
+
+# Print package specs of packages that install of <package spec> should remove
+pkg_replaces() {
+        local pkgspec=${1:?}
+        local rep
+
+        # we need to look at .spkg/replaces file before installing
+        while read -r rep; do
+                installed_pkg "$rep"
+        done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
+}
+
+# Return true if recovery is required, else false
+# If a partial install is found that can be discarded without effect
+# then remove the partial install and return false
+recovery_required() {
+        local entry rlog
+        declare -a ipkg args log
+        declare -g partial_install
+
+        try readarray -t ipkg \
+                < <(try find "$installroot" -maxdepth 1 -type d -name '.i_*' -printf '%P\n')
+
+        case "${#ipkg[@]}" in
+                0) return 1 ;;
+                1) partial_install="${ipkg[0]}" ;;
+                *) fail "Multiple partial installations found, manual intervention required" ;;
+        esac
+
+        # if log is in live package then recovery is required
+        [[ ! -f "$installroot/${partial_install:3}/.spkg/recovery_log" ]] || 
+                return 0
+
+        rlog="$installroot/$partial_install/.spkg/recovery_log"
+        # if we have a log then check if it sufficient for recovery
+        if [[ -f "$rlog" ]]; then
+                try readarray -t log < "$rlog"
+                die_if $? "reading $rlog"
+
+                for entry in "${log[@]}"; do
+                        [[ ! $entry =~ ^[1-8]$ ]] || break 
+                        args+=( "$entry" )
+                done
+
+                # Log must have at least one arg and one recovery_point
+                (( 2 > ${#log[@]} || ${#log[@]} == ${#args[@]} )) || return 0
+        fi
+
+        # No, or insufficient, log info so remove partial_install and return false
+        try rm -r "$installroot/$partial_install"
+        return 1
+}
+
+
+# Command functions
+
 # Options:
 #   -c run test checks after build
 #   -b build only (don't package files)
@@ -237,7 +269,7 @@ build_command() {
 
         parse_pkgspec "$pkgspec" || fail "invalid package spec $pkgspec"
 
-        info "executing: spkg build $*"
+        log "[Command]" "spkg build $*"
 
         while getopts ":cbp" opt; do
                 case $opt in
@@ -249,28 +281,17 @@ build_command() {
         done
         shift $(( OPTIND - 1 ))
 
-        if [[ ( $opt_build_only || $opt_check ) && $opt_package_only ]]; then
-                fail "cannot use option -p with -b or -c"
-        fi
+        (( ( $opt_build_only || $opt_check ) && $opt_package_only )) &&
+                        fail "cannot use option -p with -b or -c"
 
-        build_pkg "$pkgspec" $opt_check $opt_build_only $opt_package_only >&$outfd
+
+        build_pkg "$pkgspec" $opt_check $opt_build_only $opt_package_only
 
         if (( $opt_build_only )); then
                 info "package built $pkgspec"
         else
-                ingo "package added $pkgspec"
+                info "package added $pkgspec"
         fi
-}
-
-# Print package specs of packages that install of <package spec> should remove
-pkg_replaces() {
-        local pkgspec=${1:?}
-        local rep
-
-        # we need to look at .spkg/replaces file before installing
-        while read -r rep; do
-                installed_pkg "$rep"
-        done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
 }
 
 install_command() {
@@ -290,7 +311,7 @@ install_command() {
         done
         shift $(( OPTIND - 1 ))
 
-        info "executing: spkg install $*"
+        log "[Command]" "spkg install $*"
 
         try cd "$pkgroot"
 
@@ -300,8 +321,8 @@ install_command() {
                 f=''
                 # shellcheck disable=SC2035 # this does what is required
                 for p in $(versort -r *-$pkgsuffix); do
-                        p=${p%-"$pkgsuffix"}
-                        n=${p%-*-*}
+                        p="${p%-$pkgsuffix}"
+                        n="${p%-*-*}"
                         if [[ $f != "$n" ]]; then
                                 f=$n
                                 if ! is_installed "$p"; then
@@ -338,7 +359,6 @@ install_command() {
         elif [[ $opt_yes ]] ||
                         confirm_pkgs "Install [Y/n]? " "y" "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
-                        info "installing: $p"
                         install_pkg_command "$p"
                 done
                 info "${#pkgs[@]} packages upgraded/installed"
@@ -361,7 +381,7 @@ uninstall_command() {
         done
         shift $(( OPTIND - 1 ))
 
-        info "executing: spkg uninstall $*"
+        log "[Command]" "spkg uninstall $*"
 
         for p; do
                 if parse_pkgspec "$p"; then
@@ -384,7 +404,6 @@ uninstall_command() {
         elif [[ $opt_yes ]] ||
                         confirm_pkgs 'Uninstall [Y/n]? ' 'y' "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
-                        info "uninstalling: $p"
                         uninstall_pkg_command "$p"
                 done
                 info "${#pkgs[@]} packages uninstalled"
@@ -411,24 +430,9 @@ list_command() {
         fi
 }
 
-usage() {
-        echo "Usage: $(basename "$0") command arg"
-        echo "       $(basename "$0") --help"
-}
-
 help_command() {
         require 'help'
         show_help
-}
-
-have_partial_install() {
-        declare -a ipkg
-        try readarray -t ipkg < <(try find "$installroot" -maxdepth 1 -type d -name '.i_*' -printf '%P\n')
-        case "${#ipkg[@]}" in
-                0) return 1 ;;
-                1) partial_install="${ipkg[0]}" ; return ;;
-                *) fail "Multiple partial installations found, manual intervention required" ;;
-        esac
 }
 
 recover_command() {
@@ -436,6 +440,10 @@ recover_command() {
 
         # partial_install set by have_partial_install and
         # is the only way for recovery to be attempted
+        declare -g partial_install
+
+        log "[Command]" "spkg recover $*"
+
         if recover_pkg_command "$partial_install"; then
                 info 'Package installation recovery complete'
         else
@@ -453,7 +461,7 @@ run_command() {
                 install )        install_command "$@" ;;
                 uninstall )      uninstall_command "$@" ;;
                 list )           list_command "$@" ;;
-                -v|--version )   info "${0##*/} $version" ;;
+                -v|--version )   try echo "${0##*/} $version" ;;
                 -h|--help|help ) help_command ;;
                 "" )             usage ;;
                 * )              fail "invalid command: $cmd" ;;
@@ -465,13 +473,14 @@ run_recover_command() {
 
         [[ $cmd == "recover" && $# == 1 ]] && recover_command
 
-        fail << EOF
+        fail "$(try cat << EOF
 partial package installation detected, run:
 
 ${0##*/} recover
 
 to complete the installation
 EOF
+        )"
 }
 
 libdir=/var/lib/spkg
@@ -492,20 +501,23 @@ buildroot=$libroot/build
 buildfile=SPKGBUILD
 
 logroot=${sysroot}$logdir
-requireroot=${sysroot}$requiredir
+requireroot=${prefix}$requiredir
 
 installroot=${sysroot}$installdir
 srcroot=${sysroot}$srccache
 
 logfile=${logroot}/spkg.log
 tracefile=${logroot}/trace.log
+stdoutfile=${logroot}/stdout.log
+stderrfile=${logroot}/stderr.log
 
-try mkdir -p "${logfile%/*}"
+try mkdir -p "$logroot"
+try rm -f "$tracefile" "$stdoutfile" "$stderrfile"
 
-if have_partial_install; then
+if recovery_required; then
         cmd=run_recover_command
 else
         cmd=run_command
 fi
 
-$cmd "$@" > >(tee $outlog) 2> >(tee $errlog >&2)
+$cmd "$@" > >(tee $stdoutfile) 2> >(tee $stderrfile >&2)

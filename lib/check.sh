@@ -38,7 +38,7 @@ check_install_permissions() {
 # - linkfiles that are going to be removed/replaced belong to this package
 check_uninstall_permissions() {
         local upkgspec=${1:?}
-        local upkgname=${upkgspec%-*-*}
+        local upkgname="${upkgspec%-*-*}"
         local file sysfile dir link
 
         while read -r -d '' file; do

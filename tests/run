@@ -92,6 +92,7 @@ src_files=$(printf '../../%s ' ${files[@]})
 vdir="spkg-$pkgver"
 mkdir -p $vdir
 cp $src_files $vdir
+cp -r ../../lib $vdir
 
 tfile="spkg-$pkgver.tar.gz"
 

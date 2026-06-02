@@ -24,7 +24,7 @@ build_pkg() {
         [[ -d $builddir ]] || fail "missing build directory $builddir"
         [[ -f $builddir/$buildfile ]] || fail "missing $buildfile in build directory $builddir"
 
-        cd "$builddir"
+        try cd "$builddir"
         
         # defaults, can be added to or overridden by $buildfile
         local userfiles=("/etc/*")
@@ -34,7 +34,7 @@ build_pkg() {
 
         [[ "$pkg" == "$pkgname-$pkgver-$pkgrel" ]] || fail "build is not for $pkg"
 
-        if [[ ! $opt_package_only ]]; then
+        if (( ! $opt_package_only )); then
 
                 (( ${#sources[@]} == "${#md5sums[@]}" )) || fail "wrong number of md5sums $pkg" 
 
@@ -73,7 +73,7 @@ build_pkg() {
 
                 try cd "$srcdir"
                 call_fn build
-                if [[ $opt_check ]]; then
+                if (( $opt_check )); then
                         call_fn check
                 fi
                 call_fn package
@@ -83,7 +83,7 @@ build_pkg() {
                 fi
         fi
 
-        if [[ ! $opt_build_only ]]; then
+        if (( ! $opt_build_only )); then
                 try cd "$pkgdir"
 
                 # sanity check, symlinks must not point back into spkg directories

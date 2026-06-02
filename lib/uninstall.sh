@@ -8,8 +8,8 @@ uninstall_userfile() {
         local pkgname=${2:?}
         local pkgdir="$installroot/$pkgname"
 
-        if try cmp -s "$pkgdir/$userfile" "$sysroot/$userfile"; then
-                try rm -v "$sysroot/$userfile"
+        if cmp -s "$pkgdir/$userfile" "$sysroot/$userfile"; then
+                trace rm -v "$sysroot/$userfile"
         fi
 }
 
@@ -31,9 +31,9 @@ uninstall_pkgdirs() {
         local d
 
         # Remove in reverse order, for example a/b before a
-        for d in $(try tac "$installdir/$pkgname/.spgk/pkgdirs"); do
-                try rmdir -v --ignore-fail-on-non-empty "$sysroot/$d"
-        done
+        while IFS= read -r d; do
+                trace rmdir -v --ignore-fail-on-non-empty "$sysroot/$d"
+        done < <(try tac "$installdir/$pkgname/.spgk/pkgdirs")
 }
 
 # Remove all linkfiles from system for <package> pkgfiles
@@ -50,7 +50,7 @@ uninstall_pkgfiles() {
                 [[ -h $linkfile ]] || continue
                 targetfile="$installdir/$pkgname/$file"
                 [[ $targetfile == "$(try readlink "$linkfile")" ]] || continue 
-                try rm -v "$linkfile"
+                trace rm -v "$linkfile"
         done < "$pkgdir/.spkg/pkgfiles"
 
         die_if $? "reading $pkgdir/.spkg/pkgfiles"
@@ -66,12 +66,14 @@ uninstall_pkg_command() {
         local pkgspec=${1:?}
         local pkgname="${pkgspec%-*-*}"
 
+        info "uninstalling $pkgspec"
+
         check_uninstall_permissions "$pkgspec"
 
         pre_uninstall_pkg "$pkgname"
         uninstall_pkg "$pkgname"
         post_uninstall_pkg "$pkgname"
 
-        try rm -rv "$installroot/$pkgname"
+        trace rm -rv "$installroot/$pkgname"
 }
 

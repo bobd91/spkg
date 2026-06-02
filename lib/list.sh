@@ -3,9 +3,9 @@
 list_dir_command() {
         local pkg m
 
-        cd "$buildroot"
+        try cd "$buildroot"
 
-        for pkg in $(versort "$1"* 2>/dev/null); do
+        while IFS= read -r pkg; do
                 if [[ -f $pkgroot/$pkg-$pkgsuffix ]]; then
                         if is_installed "$pkg"; then
                                 m='i'
@@ -16,16 +16,16 @@ list_dir_command() {
                         m='d'
                 fi
 
-                printf '%s  %s\n' "$m" "$pkg"
-        done
+                try printf '%s  %s\n' "$m" "$pkg"
+        done < <(versort "$1"* 2>/dev/null)
 }
 
 list_pkg_command() {
         local pkg m
 
-        cd "$pkgroot"
+        try cd "$pkgroot"
 
-        for pkg in $(versort "$1"*"-$pkgsuffix" 2>/dev/null); do
+        while IFS= read -r pkg; do
                 pkg=${pkg%-"$pkgsuffix"}
 
                 if is_installed "$pkg"; then
@@ -34,8 +34,8 @@ list_pkg_command() {
                         m="p"
                 fi
 
-                printf "%s  %s\n" "$m" "$pkg"
-        done
+                try printf "%s  %s\n" "$m" "$pkg"
+        done < <(versort "$1"*"-$pkgsuffix" 2>/dev/null)
 }
 
 

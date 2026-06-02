@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 show_help() {
-        cat << EOF
+        try cat << EOF
 Simple Package Manager
 
 A package spec is made up of <package name>-<version>-<release>
