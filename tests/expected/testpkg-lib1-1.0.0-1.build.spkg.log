@@ -1,4 +1,2 @@
-[Info] executing: spkg build testpkg-lib1-1.0.0-1
-build function for: testpkg-lib1-1.0.0-1
-package function for: testpkg-lib1-1.0.0-1
-[Info] package added testpkg-lib1-1.0.0-1
+[Command] spkg build testpkg-lib1-1.0.0-1
+[Info] Package added testpkg-lib1-1.0.0-1

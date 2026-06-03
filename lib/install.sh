@@ -32,6 +32,8 @@ set_recovery_point() {
         local pkgdir=${2:?}
 
         try printf "%s\n" $pt >> "$installroot/$pkgdir/.spkg/recovery_log"
+        die_if $? "writing $installroot/$pkgdir/.spkg/recovery_log"
+
         recovery_point=$pt
 }
 
@@ -46,7 +48,7 @@ install_tar() {
         local pkgdir=${2:?}
 
         try rm -rf "$installroot/$pkgdir"
-        trace mkdir -p "$installroot/$pkgdir"
+        trace mkdir -pv "$installroot/$pkgdir"
         try tar xaf "$pkgroot/$pkgspec-$pkgsuffix" \
                 --strip-components=1 \
                 -C "$installroot/$pkgdir"
@@ -62,7 +64,7 @@ merge_metadata() {
 
         try cat "$nmetadir/$metafile"  "$rmetadir/$metafile" | 
                 try uniq > "$nmetadir/$metafile.merged"
-        trace mv -v "$nmetadir/$metafile.merged" "$nmetadir/$metafile"
+        try mv "$nmetadir/$metafile.merged" "$nmetadir/$metafile"
 }
 
 # Merge into <pkgdir> files from <other replaced pkgdirs>
@@ -225,10 +227,12 @@ commit_install() {
 
 uninstall_content() {
         local xpkgdir=$1
+        local file link
 
         [[ -d "$installroot/$xpkgdir" ]] || return
 
         while IFS= read -r file; do
+                [[ -h "$sysroot/$file" ]] || continue
                 link="$(try readlink "$sysroot/$file")"
                 [[ ! -e "${sysroot}$link" ]] || continue
                 trace rm -v "$sysroot/$file"
@@ -283,10 +287,11 @@ install_recover_pkg() {
                         if [[ $pkgdir == "${upkgdirs[0]}" ]]; then
                                 # pkg1 [+ ...] => pkg1 uses pkg1 as the merge package
                                 # so make a copy of original pkg1
-                                trace cp -rdv "$installroot/"{,.c_}"$pkgdir"
+                                try cp -rd "$installroot/"{,.c_}"$pkgdir"
+                                upkgdirs[0]=".c_$pkgdir"
                         else
                                 # pkg1 [+ ...] => pkgn uses new package name as the merge package
-                                trace cp -rdv "$installroot/${upkgdirs[0]}" "$installroot/$pkgdir"
+                                try cp -rd "$installroot/${upkgdirs[0]}" "$installroot/$pkgdir"
                         fi
                 fi
                 set_recovery_point 3 "$ipkgdir"
@@ -324,17 +329,17 @@ install_recover_pkg() {
         if (( recovery_point == 7 )); then
                 uninstall_content "$ipkgdir"
                 for upkgdir in "${upkgdirs[@]}"; do
-                        [[ $upkgdir == $pkgdir ]] && upkgdir=".c_$upkgdir"
                         if [[ -d "$installroot/$upkgdir" ]]; then
                                 post_uninstall_pkg "$upkgdir" "$pkgdir"
-                                trace rm -r "$installroot/$upkgdir"
+                                archive_pkg "$(try cat "$installroot/$upkgdir/.spkg/pkgspec")"
+                                rmpkgdir "$upkgdir"
                         fi
                 done
                 set_recovery_point 8 "$pkgdir"
         fi
 
-        #  Tidy up after ourselves
-        try rm -rvf "$installroot/.i_*"
+        #  Tidy up after ourselvers
+        [[ $ipkgdir ]] && rmpkgdir "$ipkgdir"
 
         # Install done!
         remove_recovery_log "$pkgdir"
@@ -381,7 +386,7 @@ recover_pkg_command() {
                 return 1
         fi
 
-        info "recovering partial installation of ${args[0]}"
+        info "Recovering partial installation of ${args[0]}"
 
         recovery_pt=${log[-1]}
         install_recover_pkg $recovery_pt "${args[@]}"
@@ -397,9 +402,9 @@ install_pkg_command() {
 
         try readarray -t upkgspecs < <(pkg_replaces "$pkgspec")
         
-        info "installing $pkgspec"
+        info "Installing $pkgspec"
         for upkgspec in "${upkgspecs[@]}"; do
-                info "removing $upkgspec"
+                info "Removing $upkgspec"
         done
 
         install_pkg "$pkgspec" "${upkgspecs[@]}"

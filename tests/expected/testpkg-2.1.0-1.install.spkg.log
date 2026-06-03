@@ -1,9 +1,4 @@
-[Info] executing: spkg install -y testpkg-2.1.0-1
-[Info] installing: testpkg-2.1.0-1
-pre_install function: testpkg-2.1.0-1 testpkg-2.0.1-1
-modifying /etc/testpkg.conf prior to installation
-post_install function: testpkg-2.1.0-1 testpkg-2.0.1-1
-pre_uninstall function: testpkg-2.0.1-1 testpkg-2.1.0-1
-[Info] removing: testpkg-2.0.1-1
-post_uninstall function: testpkg-2.0.1-1 testpkg-2.1.0-1
+[Command] spkg install -y testpkg-2.1.0-1
+[Info] Installing testpkg-2.1.0-1
+[Info] Removing testpkg-2.0.1-1
 [Info] 1 packages upgraded/installed

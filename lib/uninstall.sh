@@ -33,7 +33,7 @@ uninstall_pkgdirs() {
         # Remove in reverse order, for example a/b before a
         while IFS= read -r d; do
                 trace rmdir -v --ignore-fail-on-non-empty "$sysroot/$d"
-        done < <(try tac "$installdir/$pkgname/.spgk/pkgdirs")
+        done < <(try tac "$installroot/$pkgname/.spgk/pkgdirs")
 }
 
 # Remove all linkfiles from system for <package> pkgfiles
@@ -66,7 +66,7 @@ uninstall_pkg_command() {
         local pkgspec=${1:?}
         local pkgname="${pkgspec%-*-*}"
 
-        info "uninstalling $pkgspec"
+        info "Uninstalling $pkgspec"
 
         check_uninstall_permissions "$pkgspec"
 
@@ -74,6 +74,8 @@ uninstall_pkg_command() {
         uninstall_pkg "$pkgname"
         post_uninstall_pkg "$pkgname"
 
-        trace rm -rv "$installroot/$pkgname"
+        archive_pkg "$pkgspec"
+
+        rmpkgdir "$pkgname"
 }
 

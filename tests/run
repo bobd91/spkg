@@ -37,7 +37,7 @@ compare_logs() {
 
         if [[ -f $logdir/trace.log ]];then
                 mv $logdir/trace.log $resultdir/$tdir.$action.trace.log
-                compare_log $resultdir/$tdir.$action.spkg.log $expectdir/$tdir.$action.spkg.log
+                compare_log $resultdir/$tdir.$action.trace.log $expectdir/$tdir.$action.trace.log
         fi
 }
 

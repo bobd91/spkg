@@ -35,11 +35,17 @@ abort() {
 die() {
         local errno=$1
         local level=$2
-        local where
-        readarray -d ' ' -t where < <(caller $level)
+        local levels=${#BASH_LINENO[@]}
+
         shift 2
-        printf '%s => failed(%s) at %s:%s\n' \
-                "$*" $errno "${where[2]:0:-1}" "${where[0]}" >&2
+        printf '%s returned %d in:\n' "$*" $errno
+        for (( level+=1 ; level<levels ; level++ )); do
+                printf '%s: line %d: %s()\n' \
+                        "${BASH_SOURCE[level]}" \
+                        ${BASH_LINENO[level-1]} \
+                        "${FUNCNAME[level]}"
+        done
+
         kill -s SIGUSR1 $sigpid
         exit 1
 }
@@ -51,7 +57,8 @@ die_if() {
 
 # User error
 fail() {
-        echo "$@" >&2
+        echo 'Failed: ' "$@" >&2
+        log '[Failed]' "$@"
         kill -s SIGUSR1 $sigpid
         exit 1
 }
@@ -124,6 +131,11 @@ confirm_pkgs() {
         try printf "Selected packages:\n\n"
         try printf "%s\n\n" "$*"
         confirm "$prompt" "$def"
+}
+
+# confirm_pkgs displayed to stdout/stderr without writing to our logs
+confirm_pkgs_nolog() {
+        confirm_pkgs "$@" >&$stdoutfd >&$stderrfd
 }
 
 call_fn() {
@@ -210,6 +222,34 @@ pkg_replaces() {
         done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
 }
 
+# Move <pkgspec> build and tar file to oldroot
+archive_pkg() {
+        local pkgspec=${1:?}
+        local pkgbuilddir pkgtarfile
+
+        pkgbuilddir="$buildroot/$pkgspec"
+        pkgtarfile="$pkgroot/$pkgspec-$pkgsuffix"
+
+        if [[ -d "$pkgbuilddir" ]]; then
+                try rm -rf "$oldroot/build/$pkgspec"
+                trace mv -v "$pkgbuilddir" "$oldroot/build"
+        fi
+
+        if [[ -f "$pkgtarfile" ]]; then
+                try rm -f "$oldroot/pkg/$pkgspec-$pkgsuffix"
+                trace mv -v "$pkgtarfile" "$oldroot/pkg"
+        fi
+}
+
+# Remove installed pkg directory
+# Unfortunately rm -rv lists all of the removed files
+# And we just want to record removed directory
+rmpkgdir() {
+        local pkgdir=${1:?}
+        try rm -r "$installroot/$pkgdir"
+        printf "removed directory '%s'\n" "$installroot/$pkgdir"
+}
+
 # Return true if recovery is required, else false
 # If a partial install is found that can be discarded without effect
 # then remove the partial install and return false
@@ -224,7 +264,7 @@ recovery_required() {
         case "${#ipkg[@]}" in
                 0) return 1 ;;
                 1) partial_install="${ipkg[0]}" ;;
-                *) fail "Multiple partial installations found, manual intervention required" ;;
+                *) fail "multiple partial installations found, manual intervention required" ;;
         esac
 
         # if log is in live package then recovery is required
@@ -288,9 +328,9 @@ build_command() {
         build_pkg "$pkgspec" $opt_check $opt_build_only $opt_package_only
 
         if (( $opt_build_only )); then
-                info "package built $pkgspec"
+                info "Package built $pkgspec"
         else
-                info "package added $pkgspec"
+                info "Package added $pkgspec"
         fi
 }
 
@@ -302,6 +342,8 @@ install_command() {
 
         has_permission || fail "insufficient privilege to install packages" 
 
+        log "[Command]" "spkg install $*"
+
         while getopts ":fy" opt; do
                 case $opt in
                         f ) opt_force=1 ;; 
@@ -310,8 +352,6 @@ install_command() {
                 esac
         done
         shift $(( OPTIND - 1 ))
-
-        log "[Command]" "spkg install $*"
 
         try cd "$pkgroot"
 
@@ -355,9 +395,9 @@ install_command() {
         fi
 
         if (( ${#pkgs[@]} == 0 )); then
-                info "no packages to upgrade/install"
+                info "No packages to upgrade/install"
         elif [[ $opt_yes ]] ||
-                        confirm_pkgs "Install [Y/n]? " "y" "${pkgs[@]}"; then
+                        confirm_pkgs_nolog "Install [Y/n]? " "y" "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
                         install_pkg_command "$p"
                 done
@@ -373,6 +413,8 @@ uninstall_command() {
 
         has_permission || fail "insufficient privilege to uninstall packages" 
 
+        log "[Command]" "spkg uninstall $*"
+
         while getopts ":y" opt; do
                 case $opt in
                         y ) opt_yes=1 ;;
@@ -381,28 +423,23 @@ uninstall_command() {
         done
         shift $(( OPTIND - 1 ))
 
-        log "[Command]" "spkg uninstall $*"
-
         for p; do
                 if parse_pkgspec "$p"; then
                         if is_installed "$p"; then
-                                pkgs+=("$p")
+                                pkgs+=( "$p" )
                         else
-                                fail "package is not installed $pkg"
+                                fail "package is not installed $p"
                         fi
-                else 
-                        # should only ever be 0 or 1
-                        try read -r -d '' p < <(try find $installroot -name "$p-*" -print0)
-                        if [[ $p ]]; then
-                                pkgs+=( "${p##*/}" )
-                        fi
+                elif [[ -d "$installroot/$p" ]]; then
+                        p="$(try cat "$installroot/$p/.spkg/pkgspec")"
+                        pkgs+=( "$p" )
                 fi
         done
 
         if (( ${#pkgs[@]} == 0 )); then
-                info 'no packages to uninstall'
+                info 'No packages to uninstall'
         elif [[ $opt_yes ]] ||
-                        confirm_pkgs 'Uninstall [Y/n]? ' 'y' "${pkgs[@]}"; then
+                        confirm_pkgs_nolog 'Uninstall [Y/n]? ' 'y' "${pkgs[@]}"; then
                 for p in "${pkgs[@]}"; do
                         uninstall_pkg_command "$p"
                 done
@@ -482,6 +519,10 @@ to complete the installation
 EOF
         )"
 }
+
+# Copies of stdout/stderr for package confirm and confirm_package
+exec {stdoutfd}>&1
+exec {stderrfd}>&2
 
 libdir=/var/lib/spkg
 logdir=/var/log/spkg
