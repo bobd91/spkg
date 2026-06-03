@@ -1,0 +1,21 @@
+Package
+testpkg-1.0.0-1
+
+Files
+# testpkg-1.0.0-1 /usr/bin/testpkg
+# testpkg-1.0.0-1 /etc/testpkg.conf
+
+Required Dirs
+etc
+usr
+usr/bin
+
+Package Dirs
+etc
+usr
+usr/bin
+
+Upgrade Functions
+
+Replaces
+testpkg

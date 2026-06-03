@@ -247,7 +247,7 @@ archive_pkg() {
 rmpkgdir() {
         local pkgdir=${1:?}
         try rm -r "$installroot/$pkgdir"
-        printf "removed directory '%s'\n" "$installroot/$pkgdir"
+        trace printf "removed directory '%s'\n" "$installroot/$pkgdir"
 }
 
 # Return true if recovery is required, else false

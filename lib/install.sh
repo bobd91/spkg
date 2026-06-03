@@ -164,16 +164,14 @@ install_userfile() {
         # If system user file = old file, replace with new file
         # Note: all replaced package files will have been merged into
         #       first one so only check there
-        if (( $mpkgname )); then
+        if [[ $mpkgname ]]; then
                 mpkgfile="$installroot/$mpkgname/$userfile"
-                if [[ -e $mpkgfile ]]; then
-                        if cmp -s "$ipkgfile" "$mpkgfile"; then
-                                return
-                        fi
-                        if cmp -s "$sysfile" "$mpkgfile"; then
-                                trace cp -v "$ipkgfile" "$sysfile"
-                                return
-                        fi
+                if cmp -s "$ipkgfile" "$mpkgfile"; then
+                        return
+                fi
+                if cmp -s "$sysfile" "$mpkgfile"; then
+                        trace cp -v "$ipkgfile" "$sysfile"
+                        return
                 fi
         fi
 
@@ -339,7 +337,7 @@ install_recover_pkg() {
         fi
 
         #  Tidy up after ourselvers
-        [[ $ipkgdir ]] && rmpkgdir "$ipkgdir"
+        [[ $ipkgdir && -d "$installroot/$ipkgdir" ]] && rmpkgdir "$ipkgdir"
 
         # Install done!
         remove_recovery_log "$pkgdir"

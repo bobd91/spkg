@@ -1,0 +1,23 @@
+Package
+testpkg-lib1-1.0.0-1
+
+Files
+# testpkg-lib1-1.0.0-1 /usr/share/lib1/info
+# testpkg-lib1-1.0.0-1 /usr/lib/lib2.so.1
+# testpkg-lib1-1.0.0-1 /usr/lib/lib1.so.1
+
+Required Dirs
+usr
+usr/share
+usr/share/lib1
+usr/lib
+
+Package Dirs
+usr/share
+usr/share/lib1
+usr/lib
+
+Upgrade Functions
+
+Replaces
+testpkg-lib1

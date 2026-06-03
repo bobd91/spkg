@@ -13,7 +13,7 @@ log_diff() {
 }
 
 compare_log() {
-        if cmp "$@"; then
+        if cmp -s "$@"; then
                 printf '.'
         else
                 printf 'x'
@@ -41,6 +41,39 @@ compare_logs() {
         fi
 }
 
+cat_pkg() {
+        local pkgspec=${1:?}
+        local pkgname="${pkgspec%-*-*}"
+        local pkgdir="$testroot/spkg/$pkgname"
+        local metadir="$pkgdir/.spkg"
+
+        echo "Package"
+        cat "$metadir/pkgspec"
+        echo
+
+        echo "Files"
+        while read -r f; do
+                cat "$pkgdir/$f"
+        done < <(cat "$metadir/"{pkgfiles,userfiles})
+        echo
+
+        echo "Required Dirs"
+        cat "$metadir/reqdirs"
+        echo
+
+        echo "Package Dirs"
+        cat "$metadir/pkgdirs"
+        echo
+
+        echo "Upgrade Functions"
+        cat "$metadir/upgradefns"
+        echo
+
+        echo "Replaces"
+        cat "$metadir/replaces"
+}
+                
+
 run_pkg() {
         local tdir tver md5
 
@@ -60,10 +93,17 @@ run_pkg() {
         $spkg build $tdir &> /dev/null
         r=$?
         compare_logs "$tdir" "build"
-        
+
         if (( r == 0 )); then
                 $spkg install -y $tdir &> /dev/null
+                r=$?
                 compare_logs "$tdir" "install"
+                
+                if (( r == 0 )); then
+                        cat_pkg "$tdir" > "$resultdir/$tdir.package.log"
+                        compare_log "$resultdir/$tdir.package.log" "$expectdir/$tdir.package.log"
+                fi
+                
         fi
 }
 
