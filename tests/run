@@ -107,6 +107,15 @@ run_pkg() {
         fi
 }
 
+rem_pkg() {
+        tdir=${1:?}
+        rm -f $logdir/spkg.log
+        $spkg uninstall -y $tdir &> /dev/null
+        compare_logs "$tdir" "uninstall"
+}
+
+
+
 [[ -d testroot ]] && rm -r testroot
 
 files=( configure Makefile.in spkg.bash spkg.conf.in SPKGBUILD.in spkg.in )
@@ -173,5 +182,8 @@ run_pkg testpkg-2.1.0-1
 # New package with file owned by spkg
 # Should fail
 run_pkg testpkg2-1.0.0-1
+
+# And uninstall testpkg
+rem_pkg testpkg-2.1.0-1
 
 printf '\n'

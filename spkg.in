@@ -2,12 +2,6 @@
 
 # Simple Package Manager
 
-# TODO: improve error logging and failure behaviour
-
-# TODO: confirm that pkgdirs are copied forward into new package
-
-# TODO: check uninstall behaviour of merged/replaced packages
-
 # TODO: testing
 
 # TODO: lfs2spkg 
@@ -23,8 +17,7 @@ version=SPKG_version
 # Error handling
 
 set -E
-trap abort SIGUSR1
-sigpid=$$
+trap abort SIGTERM
 
 abort() {
         printf 'Aborting...\n' >&2
@@ -38,16 +31,15 @@ die() {
         local levels=${#BASH_LINENO[@]}
 
         shift 2
-        printf '%s returned %d in:\n' "$*" $errno
+        printf '%s returned %d in:\n' "$*" $errno >&2
         for (( level+=1 ; level<levels ; level++ )); do
                 printf '%s: line %d: %s()\n' \
                         "${BASH_SOURCE[level]}" \
                         ${BASH_LINENO[level-1]} \
-                        "${FUNCNAME[level]}"
+                        "${FUNCNAME[level]}" >&2
         done
 
-        kill -s SIGUSR1 $sigpid
-        exit 1
+        kill 0
 }
 
 die_if() {
@@ -112,9 +104,14 @@ require() {
         local lib
         for lib; do
                 [[ ! ${require_done[$lib]} ]] || continue
-                source_file "$requireroot/$lib.sh"
+                source_file -p "$requirepath" "$lib.sh"
                 require_done[$lib]=1
         done
+}
+
+call_fn() {
+        [[ "$(type -t "$1")" == function ]] || return
+        try "$@"
 }
 
 confirm () {
@@ -122,6 +119,24 @@ confirm () {
         try echo
         [[ ${REPLY,,} =~ ^(|"$2")$ ]]
 }
+
+# Add $prefix to the front of each element of a PATH
+prefix_path() {
+        local sep dirs dir
+        declare -g prefix
+
+        [[ $prefix ]] || return
+
+        readarray -d ':' -t dirs <<< "$1"
+
+        for dir in "${dirs[@]}"; do
+                printf '%s%s%s' "$sep" "$prefix" "$dir"
+                sep=':'
+        done
+}
+
+
+# Package utility functions
 
 confirm_pkgs() {
         local prompt=${1:?}
@@ -137,13 +152,6 @@ confirm_pkgs() {
 confirm_pkgs_nolog() {
         confirm_pkgs "$@" >&$stdoutfd >&$stderrfd
 }
-
-call_fn() {
-        [[ "$(type -t "$1")" == function ]] || return
-        try "$@"
-}
-
-# Package utility functions
 
 has_permission() {
         [[ -w "$installroot" ]]
@@ -211,17 +219,6 @@ latest_pkg() {
         fi
 }
 
-# Print package specs of packages that install of <package spec> should remove
-pkg_replaces() {
-        local pkgspec=${1:?}
-        local rep
-
-        # we need to look at .spkg/replaces file before installing
-        while read -r rep; do
-                installed_pkg "$rep"
-        done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
-}
-
 # Move <pkgspec> build and tar file to oldroot
 archive_pkg() {
         local pkgspec=${1:?}
@@ -277,13 +274,8 @@ recovery_required() {
                 try readarray -t log < "$rlog"
                 die_if $? "reading $rlog"
 
-                for entry in "${log[@]}"; do
-                        [[ ! $entry =~ ^[1-8]$ ]] || break 
-                        args+=( "$entry" )
-                done
-
-                # Log must have at least one arg and one recovery_point
-                (( 2 > ${#log[@]} || ${#log[@]} == ${#args[@]} )) || return 0
+                # Log must have at least one arg and end with ===
+                [[ 2 > ${#log[@]} || '===' != "${log[-1]}" ]] || return 0
         fi
 
         # No, or insufficient, log info so remove partial_install and return false
@@ -526,7 +518,7 @@ exec {stderrfd}>&2
 
 libdir=/var/lib/spkg
 logdir=/var/log/spkg
-requiredir=/usr/share/spkg/lib
+requirepath=/usr/share/spkg/lib
 installdir=/spkg
 srccache=/sources
 pkgsuffix="x86_64.spkg.tar.gz"
@@ -542,7 +534,7 @@ buildroot=$libroot/build
 buildfile=SPKGBUILD
 
 logroot=${sysroot}$logdir
-requireroot=${prefix}$requiredir
+requirepath="$(prefix_path "$requirepath")"
 
 installroot=${sysroot}$installdir
 srcroot=${sysroot}$srccache

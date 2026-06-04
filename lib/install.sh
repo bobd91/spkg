@@ -17,24 +17,11 @@
 
 require 'check' 'upgrade'
 
-recovery_point=0
-
-start_recovery_log() {
-        local pkgspec=${1:?}
-        local pkgdir=".i_${pkgspec%-*-*}"
+create_recovery_log() {
+        local ipkgdir=${1:?}
         
-        try printf '%s\n' "$@" > "$installroot/$pkgdir/.spkg/recovery_log"
-        set_recovery_point 1 "$pkgdir"
-}
-
-set_recovery_point() {
-        local pt=${1:?}
-        local pkgdir=${2:?}
-
-        try printf "%s\n" $pt >> "$installroot/$pkgdir/.spkg/recovery_log"
-        die_if $? "writing $installroot/$pkgdir/.spkg/recovery_log"
-
-        recovery_point=$pt
+        try printf '%s\n' "$@" '===' > "$installroot/$ipkgdir/.spkg/recovery_log"
+        die_if $? "writing $installroot/$ipkgdir/.spkg/recovery_log"
 }
 
 remove_recovery_log() {
@@ -58,9 +45,8 @@ merge_metadata() {
         local npkgname=${1:?}
         local rpkgname=${2:?}
         local metafile=${3:?}
-        local nmetadir rmetadir
-        nmetadir="$installroot/$npkgname/.spkg"
-        rmetadir="$installroot/$rpkgname/.spkg"
+        local nmetadir="$installroot/$npkgname/.spkg"
+        local rmetadir="$installroot/$rpkgname/.spkg"
 
         try cat "$nmetadir/$metafile"  "$rmetadir/$metafile" | 
                 try uniq > "$nmetadir/$metafile.merged"
@@ -144,9 +130,9 @@ install_userfile() {
         local userfile=${1:?}
         local ipkgname=${2:?}
         local mpkgname=$3
-
-        ipkgfile="$installroot/$ipkgname/$userfile"
-        sysfile="$sysroot/$userfile"
+        local ipkgfile="$installroot/$ipkgname/$userfile"
+        local sysfile="$sysroot/$userfile"
+        local mpkgfile
 
         # If system user file does not exist, copy in new one
         if [[ ! -f "$sysfile" ]]; then
@@ -223,7 +209,7 @@ commit_install() {
         trace mv -vT $exchange "$installroot/$ipkgdir" "$installroot/$pkgdir"
 }
 
-uninstall_content() {
+remove_content() {
         local xpkgdir=$1
         local file link
 
@@ -239,102 +225,92 @@ uninstall_content() {
         die_if $? "reading $installroot/$xpkgdir/.spkg/pkgfiles"
 }
 
+# Check ok to install, create .i_<pkgname> dir and untar package into it
+# <pkgspec> <remove pkgspecs...>
+prepare_install() {
+        declare -g pkgspec ipkgdir
 
-# Install is ok if nothing crashes
-# but if there is a crash for some reason, recovery is non-trivial
-# recovery info and recovery_point is saved as we proceed to enable restart
-# The recovery log is stored in the package to be installed
-# which, after commit_install, becomes the package that has been installed
-install_recover_pkg() {
-        local recovery_point=${1:?}
-        local pkgspec=${2:?}
-        local pkgdir="${pkgspec%-*-*}"
-        local ipkgdir=".i_$pkgdir"
-        local upkgspec
-        declare -a upkgdirs
+        # Ensure no file clashes (2 package own same file)
+        check_install_permissions "$pkgspec" "$@"
 
-        shift 2
-        for upkgspec; do
-                upkgdirs+=( "${upkgspec%-*-*}" )
+        install_tar "$pkgspec" "$ipkgdir"
+
+        # From now on we want to be able to recover installation
+        create_recovery_log "$ipkgdir"
+}
+
+# We have new package in .i_<pgkname> 
+# In recovery mode any section could be run again so must be idempotent
+install() {
+        declare -g pkgdir ipkgdir upkgdirs
+        local upkgdir
+
+        # Run package supplied pre_install and pre_uninstall functions
+        pre_install_pkg "$ipkgdir" "${upkgdirs[@]}"
+
+        for upkgdir in "${upkgdirs[@]}"; do
+                pre_uninstall_pkg "$upkgdir" "$ipkgdir"
         done
 
-        if (( recovery_point == 0 )); then
-                # Ensure no file clashes (2 package own same file)
-                check_install_permissions "$pkgspec" "$@"
+        # If upgrading, prepare a merge package
+        if (( ${#upkgdirs[@]} )); then
+                # This bit is sensitive to restore problems
+                # Cannot just try again as: 
+                #  - the merge package contents will change (so can't copy from)
+                #  - file system files will target merge package (so can't delete and recreate)
+                # As we take recursive copies we have no way to tell
+                # if they fully worked or not so:
+                #  - recursive copy to .t_<pkgdir>
+                #  - then mv to final destination
 
-                # Create .i_pkg directory and add content from pkg far file 
-                install_tar "$pkgspec" "$ipkgdir"
-
-                # From now on we want to be able to recover installation
-                start_recovery_log "$pkgspec" "$@"
-        fi
-
-        if (( recovery_point == 1 )); then
-                # Run package supplied pre-install and pre_uninstall functions
-                pre_install_pkg "$ipkgdir" "${upkgdirs[@]}"
-
-                for upkgdir in "${upkgdirs[@]}"; do
-                        pre_uninstall_pkg "$upkgdir" "$ipkgdir"
-                done
-                set_recovery_point 2 "$ipkgdir"
-        fi
-
-        if (( recovery_point == 2 )); then
-                # If upgrading, prepare a merge package
-                if (( ${#upkgdirs[@]} )); then
-                        if [[ $pkgdir == "${upkgdirs[0]}" ]]; then
-                                # pkg1 [+ ...] => pkg1 uses pkg1 as the merge package
-                                # so make a copy of original pkg1
-                                try cp -rd "$installroot/"{,.c_}"$pkgdir"
-                                upkgdirs[0]=".c_$pkgdir"
-                        else
-                                # pkg1 [+ ...] => pkgn uses new package name as the merge package
-                                try cp -rd "$installroot/${upkgdirs[0]}" "$installroot/$pkgdir"
+                try rm -rf "$installroot/.t_$pkgdir"
+                if [[ $pkgdir == "${upkgdirs[0]}" ]]; then
+                        # pkg1 [+ ...] => pkg1 uses pkg1 as the merge package
+                        # so make a copy of original pkg1 as .c_<pkgdir>
+                        if [[ ! -d "$installroot/.c_$pkgdir" ]]; then
+                                try cp -rd "$installroot/"{,.t_}"$pkgdir"
+                                try mv "$installroot/"{.t_,.c_}"$pkgdir"
+                        fi
+                        upkgdirs[0]=".c_$pkgdir"
+                else
+                        # pkg1 [+ ...] => pkgn uses new package name as the merge package
+                        if [[ -d "$installroot/$pkgdir" ]]; then
+                                try cp -rd "$installroot/${upkgdirs[0]}" "$installroot/.t_$pkgdir"
+                                try mv "$installroot/"{.t_,}"$pkgdir"
                         fi
                 fi
-                set_recovery_point 3 "$ipkgdir"
         fi
 
-        if (( recovery_point == 3 )); then
-                # If upgrading, merge additional packages into merge package
-                if (( ${#upkgdirs[@]} )); then
-                        merge_pkgs "$pkgdir" "${upkgdirs[@]}"
+        # If upgrading, merge additional packages into merge package
+        if (( ${#upkgdirs[@]} )); then
+                merge_pkgs "$pkgdir" "${upkgdirs[@]}"
+        fi
+
+        # Install links/files
+        install_content "$ipkgdir" "$pkgdir"
+        # Copy forward the list of created directories
+        merge_pkgdirs "$ipkgdir" "$pkgdir" 
+
+        # Make install live, exchange .i_pkg1 with old (possibly merged) pkg
+        commit_install "$ipkgdir" "$pkgdir"
+}
+
+post_install() {
+        declare -g pkgdir ipkgdir upkgdirs 
+
+        # Run package supplied post_install function
+        post_install_pkg "$pkgdir" "${upkgdirs[@]}"
+
+        # Remove replaced packages, run post_uninstall functions
+        # Archive replaced package build and tar files
+        remove_content "$ipkgdir"
+        for upkgdir in "${upkgdirs[@]}"; do
+                if [[ -d "$installroot/$upkgdir" ]]; then
+                        post_uninstall_pkg "$upkgdir" "$pkgdir"
+                        archive_pkg "$(try cat "$installroot/$upkgdir/.spkg/pkgspec")"
+                        rmpkgdir "$upkgdir"
                 fi
-                set_recovery_point 4 "$ipkgdir"
-        fi
-
-        if (( recovery_point == 4 )); then
-                # Install links/files
-                install_content "$ipkgdir" "$pkgdir"
-                # Copy forward the list of created directories
-                merge_pkgdirs "$ipkgdir" "$pkgdir" 
-
-                set_recovery_point 5 "$ipkgdir"
-        fi
-
-        if (( recovery_point == 5 )); then
-                # Make install live, exchange .i_pkg1 with old (possibly merged) pkg
-                commit_install "$ipkgdir" "$pkgdir"
-                set_recovery_point 6 "$pkgdir"
-        fi
-
-        if (( recovery_point == 6 )); then
-                # Run package supplied post_install and post_uninstall functions
-                post_install_pkg "$pkgdir" "${upkgdirs[@]}"
-                set_recovery_point 7 "$pkgdir"
-        fi
-
-        if (( recovery_point == 7 )); then
-                uninstall_content "$ipkgdir"
-                for upkgdir in "${upkgdirs[@]}"; do
-                        if [[ -d "$installroot/$upkgdir" ]]; then
-                                post_uninstall_pkg "$upkgdir" "$pkgdir"
-                                archive_pkg "$(try cat "$installroot/$upkgdir/.spkg/pkgspec")"
-                                rmpkgdir "$upkgdir"
-                        fi
-                done
-                set_recovery_point 8 "$pkgdir"
-        fi
+        done
 
         #  Tidy up after ourselvers
         [[ $ipkgdir && -d "$installroot/$ipkgdir" ]] && rmpkgdir "$ipkgdir"
@@ -343,8 +319,25 @@ install_recover_pkg() {
         remove_recovery_log "$pkgdir"
 }
 
-install_pkg() {
-        install_recover_pkg 0 "$@"
+install_or_recover_pkg() {
+        local start_at=${1:?}
+        local pkgspec=${2:?}
+        local pkgdir="${pkgspec%-*-*}"
+        local ipkgdir=".i_$pkgdir"
+        local upkgspec
+        declare -a upkgdirs
+        
+        shift 2
+        for upkgspec; do
+                upkgdirs+=( "${upkgspec%-*-*}" )
+        done
+
+        case $start_at in
+                start   ) prepare_install "$@" ;&
+                install ) install ;&
+                post    ) post_install ;;
+                * ) fail "invalid recovery start point: $start_at"
+        esac
 }
 
 # Only call if there is an <.i_pkg> directory in installroot
@@ -352,8 +345,8 @@ install_pkg() {
 recover_pkg_command() {
         local ipkgdir=${1:?}
         local pkgdir="${ipkgdir:3}"
-        local rpkgdir entry recovery_pt
-        declare -a args log
+        local rpkgdir
+        declare -a log
 
         if [[ -f "$installroot/$ipkgdir/.spkg/recovery_log" ]]; then
                 rpkgdir="$ipkgdir"
@@ -367,17 +360,11 @@ recover_pkg_command() {
         fi
 
         try readarray -t log < "$installroot/$rpkgdir/.spkg/recovery_log"
-
         die_if $? "reading $installroot/$rpkgdir/.spkg/recovery_log"
 
         
-        for entry in "${log[@]}"; do
-                [[ ! $entry =~ ^[1-8]$ ]] || break 
-                args+=( "$entry" )
-        done
-
-        # Log must have at least one arg and one recovery_point
-        if (( 2 > ${#log[@]} || ${#log[@]} == ${#args[@]} )); then
+        # Log must have at leat one entry and end with '==='
+        if (( 2 > ${#log[@]} || '===' != "${log[-1]}" )); then
                 # should never happen due to recovery_required check
                 # incomplete log, remove i_pkg and return failure
                 try rm -r "$installroot/$ipkgdir"
@@ -386,13 +373,33 @@ recover_pkg_command() {
 
         info "Recovering partial installation of ${args[0]}"
 
-        recovery_pt=${log[-1]}
-        install_recover_pkg $recovery_pt "${args[@]}"
+        # Remove trailing ===
+        try unset 'log[-1]'
+
+        if [[ $rpkgdir == $ipkgdir ]];then
+                install_or_recover_pkg 'install' "${log[@]}"
+        else
+                install_or_rcover_pkg 'post' "${log[@]}"
+        fi
 }
 
+install_pkg() {
+        install_or_recover_pkg 'start' "$@"
+}
+
+# Print package specs of packages that install of <package spec> should remove
+pkg_replaces() {
+        local pkgspec=${1:?}
+        local rep
+
+        # we need to look at .spkg/replaces file before installing
+        while read -r rep; do
+                installed_pkg "$rep"
+        done < <(try tar xOf "$pkgroot/$pkgspec-$pkgsuffix" "$pkgspec/.spkg/replaces")
+}
 
 # Install <package spec> (already checked package exists)
-# Uninstalls any installed packages that are being replaced
+# Removes any installed packages that are being replaced
 install_pkg_command() {
         local pkgspec=${1:?}
         declare -a upkgspecs 

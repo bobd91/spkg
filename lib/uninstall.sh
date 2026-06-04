@@ -33,7 +33,7 @@ uninstall_pkgdirs() {
         # Reverse sort before removal so /a/b/c gets removed before /a/b
         while IFS= read -r d; do
                 trace rmdir -v --ignore-fail-on-non-empty "$sysroot/$d"
-        done < <(try sort -r "$installroot/$pkgname/.spgk/pkgdirs")
+        done < <(try sort -r "$installroot/$pkgname/.spkg/pkgdirs")
 }
 
 # Remove all linkfiles from system for <package> pkgfiles

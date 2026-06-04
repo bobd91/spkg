@@ -2,11 +2,13 @@
 
 with_upgradefns() {
         local pkgname=${2:?}
-        local pre_install post_install pre_uninstall post_uninstall
 
-        source_file "$installroot/$pkgname/.spkg/upgradefns"
-
-        call_fn "$@"
+        (
+                trap 'exit 1' SIGTERM
+                unset -f pre_install pre_uninstall post_install post_uninstall
+                source_file "$installroot/$pkgname/.spkg/upgradefns"
+                call_fn "$@"
+        )
 }
 
 pre_install_pkg() {
