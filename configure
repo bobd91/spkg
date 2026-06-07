@@ -147,7 +147,7 @@ get_src_md5() {
 }
 
 pkg=spkg
-version=0.1.1
+version=0.1.2
 release=1
 
 is_spkgbuild=no

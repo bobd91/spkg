@@ -280,6 +280,7 @@ recovery_required() {
 
         # No, or insufficient, log info so remove partial_install and return false
         try rm -r "$installroot/$partial_install"
+        unset -v partial_install
         return 1
 }
 
@@ -371,7 +372,7 @@ install_command() {
                                                 # forceable reinstall
                                                 # no idea of the state things are in
                                                 # so remove package installdir and try again
-                                                try rm -r "${installroot:?}/$p"
+                                                try rm -r "${installroot:?}/${p%-*-*}"
                                         else
                                                 fail "package $p is already installed, use install -f to force reinstall"
                                         fi
@@ -470,6 +471,8 @@ recover_command() {
         # partial_install set by have_partial_install and
         # is the only way for recovery to be attempted
         declare -g partial_install
+
+        has_permission || fail "insufficient privilege to recover installation" 
 
         log "[Command]" "spkg recover $*"
 

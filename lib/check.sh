@@ -15,8 +15,10 @@ check_install_permissions() {
                 [[ -w $dir ]] || fail "no write permission to $dir"
                 [[ -h $sysfile ]] || continue
                 link="$(try readlink "$sysfile")"
-                ok=''
-                if (( $# )); then
+                if [[ $link =~ ^$installdir/${npkgspec%-*-*} ]]; then
+                        ok=1
+                elif (( $# )); then
+                        ok=0
                         for rpkgspec; do
                                 if [[ $link =~ ^$installdir/${rpkgspec%-*-*} ]]; then
                                         ok=1
@@ -24,9 +26,9 @@ check_install_permissions() {
                                 fi
                         done
                 fi
-                [[ $ok ]] ||
+                (( $ok )) ||
                         fail "install file is not owned by this package: $sysfile" 
-        done < <(try tar -taf "$pkgroot/$npkgspec-$pkgsuffix" --exclude=.spkg)
+        done < <(ty tar -taf "$pkgroot/$npkgspec-$pkgsuffix" --exclude=.spkg)
 
         for rpkgspec; do
                 check_uninstall_permissions "$rpkgspec"

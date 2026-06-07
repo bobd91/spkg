@@ -114,9 +114,26 @@ rem_pkg() {
         compare_logs "$tdir" "uninstall"
 }
 
+# <our function name> <function name in install.sh to inject>
+inject_dummy_install() {
+        mkdir -p "$testroot/dummylib"
+
+        {
+                cat "source_file $libdir/install.sh"
+                printf '\n%s()\n' $2  
+                type $1 | tail -n +3 
+        }  > "$testroot/dummylib/install.sh"
+
+        echo "requirepath=$testroot/dummylib:\$requirepath" >> "$testroot/tools/etc/spkg.conf"
+}
+
+remove_dummy_install() {
+        rm -rf "$testroot/dummylib"
+        sed -i '/^requirepath=/d' "$testroot/tools/etc/spkg.conf"
+}
 
 
-[[ -d testroot ]] && rm -r testroot
+rm -rf testroot
 
 files=( configure Makefile.in spkg.bash spkg.conf.in SPKGBUILD.in spkg.in )
 
