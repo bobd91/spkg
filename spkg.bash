@@ -12,22 +12,22 @@ _spkg_completions() {
                                 build ) opts=( '-b' '-c' '-p' '-bc') ;;
                                 install ) opts=( '-y' '-f' '-fy' '-yf') ;;
                                 uninstall ) opts=( '-y' ) ;;
-                                list ) opts=( '-d' ) ;;
+                                list ) opts=( '-a' '-i' '-p' '-d' ) ;;
                                 * ) opts=() ;;
                         esac
                 else
                         case ${COMP_WORDS[1]} in
-                                build ) opts=( $(spkg list -d | grep '^d' | sed 's|^..||' ) ) ;;
+                                build ) opts=( $(spkg list -d | grep '^..d' | awk '{print $2}' ) ) ;;
                                 install ) 
-                                        g='^p'
+                                        g='^.p'
                                         for (( i = 2 ; i < COMP_CWORD ; i++ )); do
                                                 if [[ ${COMP_WORDS[i]} =~ 'f' ]]; then
                                                         g='^i'
                                                         break
                                                 fi
                                         done
-                                        opts=( $(spkg list | grep "$g" | sed 's|^..||' ) ) ;;
-                                uninstall ) opts=( $(spkg list | grep '^i' | sed 's|^..||' ) ) ;;
+                                        opts=( $(spkg list | grep "$g" | awk '{print $2}' ) ) ;;
+                                        uninstall ) opts=( $(spkg list | grep '^i' | awk '{print $2}' ) ) ;;
                                 * ) opts=() ;;
                         esac
                         compopt -o nospace

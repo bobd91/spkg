@@ -19,6 +19,7 @@ require 'check' 'upgrade'
 
 create_recovery_log() {
         local ipkgdir=${1:?}
+        shift
         
         try printf '%s\n' "$@" '===' > "$installroot/$ipkgdir/.spkg/recovery_log"
         die_if $? "writing $installroot/$ipkgdir/.spkg/recovery_log"
@@ -236,7 +237,7 @@ prepare_install() {
         install_tar "$pkgspec" "$ipkgdir"
 
         # From now on we want to be able to recover installation
-        create_recovery_log "$ipkgdir"
+        create_recovery_log "$ipkgdir" "$pkgspec" "$@"
 }
 
 # We have new package in .i_<pgkname> 
@@ -274,7 +275,7 @@ install() {
                         upkgdirs[0]=".c_$pkgdir"
                 else
                         # pkg1 [+ ...] => pkgn uses new package name as the merge package
-                        if [[ -d "$installroot/$pkgdir" ]]; then
+                        if [[ ! -d "$installroot/$pkgdir" ]]; then
                                 try cp -rd "$installroot/${upkgdirs[0]}" "$installroot/.t_$pkgdir"
                                 try mv "$installroot/"{.t_,}"$pkgdir"
                         fi
@@ -364,7 +365,7 @@ recover_pkg_command() {
 
         
         # Log must have at leat one entry and end with '==='
-        if (( 2 > ${#log[@]} || '===' != "${log[-1]}" )); then
+        if [[ 2 > ${#log[@]} || '===' != "${log[-1]}" ]]; then
                 # should never happen due to recovery_required check
                 # incomplete log, remove i_pkg and return failure
                 try rm -r "$installroot/$ipkgdir"

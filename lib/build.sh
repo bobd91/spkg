@@ -86,6 +86,12 @@ build_pkg() {
         if (( ! $opt_build_only )); then
                 try cd "$pkgdir"
 
+                # Leave merging into main dir for another day...
+                if [[ -f "usr/share/info/dir" ]]; then
+                        try mv "usr/share/info/dir" \
+                                "usr/share/info/$pkgname.dir"
+                fi
+
                 # sanity check, symlinks must not point back into spkg directories
                 while IFS= read -r -d '' link; do
                         if [[ $(readlink "$link") =~ $libdir ]]; then

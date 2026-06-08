@@ -86,7 +86,6 @@ validate_options() {
         srcfile="${with_sysroot}$srccache/$pkg-$version.tar.gz"
         [[ ! -e $builddir ]] || fail "Build directory already exists $builddir"
         [[ ! -e $pkgdir ]] || fail "Package directory already exists $pkgdir"
-        [[ ! -e $installdir ]] || fail "Install directory already exists $installdir"
         [[ -f $srcfile ]] || fail "Source tarball not found $srcfile"
 }
 
@@ -147,7 +146,7 @@ get_src_md5() {
 }
 
 pkg=spkg
-version=0.1.2
+version=0.1.4
 release=1
 
 is_spkgbuild=no

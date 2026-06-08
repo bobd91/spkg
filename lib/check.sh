@@ -10,10 +10,10 @@ check_install_permissions() {
         shift
         while read -r file; do
                 sysfile="$sysroot/${file#*/}"
+                [[ -h $sysfile ]] || continue
                 dir="${sysfile%/*}"
                 [[ -d $dir ]] || continue
                 [[ -w $dir ]] || fail "no write permission to $dir"
-                [[ -h $sysfile ]] || continue
                 link="$(try readlink "$sysfile")"
                 if [[ $link =~ ^$installdir/${npkgspec%-*-*} ]]; then
                         ok=1
@@ -28,7 +28,7 @@ check_install_permissions() {
                 fi
                 (( $ok )) ||
                         fail "install file is not owned by this package: $sysfile" 
-        done < <(ty tar -taf "$pkgroot/$npkgspec-$pkgsuffix" --exclude=.spkg)
+        done < <(try tar -taf "$pkgroot/$npkgspec-$pkgsuffix" --exclude=.spkg)
 
         for rpkgspec; do
                 check_uninstall_permissions "$rpkgspec"
@@ -45,10 +45,10 @@ check_uninstall_permissions() {
 
         while read -r -d '' file; do
                 linkfile="$sysroot/$file"
+                [[ -h $linkfile ]] || continue
                 dir="${sysfile%/*}"
                 [[ -d $dir ]] || continue
                 [[ -w $dir ]] || fail "no write permission to $dir"
-                [[ -h $linkfile ]] || continue
                 link="$(try readlink "$linkfile")"
                 [[ $link =~ ^$installdir/$upkgname ]] ||
                         fail "uninstall file is not owned by this package: $linkfile"

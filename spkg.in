@@ -49,10 +49,9 @@ die_if() {
 
 # User error
 fail() {
-        echo 'Failed: ' "$@" >&2
+        echo 'Failed:' "$@" >&2
         log '[Failed]' "$@"
-        kill -s SIGUSR1 $sigpid
-        exit 1
+        kill 0
 }
 
 # Try to run something, die if it fails
@@ -65,6 +64,15 @@ trace() {
         "$@" >> "$tracefile" || die $? 1 "$@"
 }
 
+# Restore stdout/stderr and wait for children
+# Due to race condition with teed output (see end of this file) 
+cleanup() {
+        local rc=$?
+        #[[ $stdoutfd ]] && exec >&$stdoutfd
+        #[[ $stderrfd ]] && exec 2>&$stderrfd
+        wait
+        return $rc
+}
 
 # Logging functions
 
@@ -192,7 +200,7 @@ is_installed() {
 # Print package specs that match args sorted by name and version number
 # If first argument is '-r' then reverse sort
 versort() {
-        local args='-bdv'
+        local args='-V'
 
         # Using output of ls in scripts is problematic but we want to use version sorting
         # And package names shouldn't contain newlines and other odd characters
@@ -201,7 +209,7 @@ versort() {
                 shift
         fi
 
-        ls "$args" "$@" 2> /dev/null
+        try printf "%s\n" "$@" | try sort $args
 }
 
 # Print package spec of the <package name> with the highest version number
@@ -214,8 +222,8 @@ latest_pkg() {
         try readarray -t tars < <(pkgfiles "$pkgroot/$pkgname")
         if (( ${#tars[@]} )); then
                 versort "${tars[@]}" | 
-                        try sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" | 
-                        try tail -n 1
+                        try tail -n 1 |
+                        try sed -e "s|/\([^/]\+/\)*\(.*\)\-$pkgsuffix|\2|" 
         fi
 }
 
@@ -443,20 +451,26 @@ uninstall_command() {
 list_command() {
         require 'list'
 
-        local opt opt_dir
+        declare -a all_types
+        local opt opt_archive opt_builddir opt_installed opt_packaged types
         
-        while getopts ":d" opt; do
+        while getopts ":aipd" opt; do
                 case $opt in
-                        d ) opt_dir=1 ;;
+                        a ) opt_archive=1 ;;
+                        d ) opt_builddir=4 ;;
+                        i ) opt_installed=1 ;;
+                        p ) opt_packaged=2 ;;
                         * ) fail "Invalid option: $OPTARG" ;;
                 esac
         done
         shift $(( OPTIND - 1 ))
 
-        if [[ $opt_dir ]]; then
-                list_dir_command "$@"
+        all_types=( '' i p d ip d id pd ipd )
+        types="${all_types[opt_installed + opt_packaged + opt_builddir]}"
+        if (( $opt_archive )); then
+                list_archive_command "$types" "$@"
         else
-                list_pkg_command "$@"
+                list_pkg_command "$types" "$@"
         fi
 }
 
@@ -503,7 +517,10 @@ run_command() {
 run_recover_command() {
         local cmd=$1
 
-        [[ $cmd == "recover" && $# == 1 ]] && recover_command
+        if [[ $cmd == "recover" && $# == 1 ]]; then
+                recover_command
+                return
+        fi
 
         fail "$(try cat << EOF
 partial package installation detected, run:
@@ -555,5 +572,7 @@ if recovery_required; then
 else
         cmd=run_command
 fi
+
+trap 'cleanup' EXIT
 
 $cmd "$@" > >(tee $stdoutfile) 2> >(tee $stderrfile >&2)
