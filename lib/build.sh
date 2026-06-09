@@ -122,7 +122,7 @@ build_pkg() {
 
                 # turn on dotglob so we get ALL files and dirs
                 try shopt -s dotglob
-                try find -- * -name .spkg -prune -o -type f -print |
+                try find -- * -name .spkg -prune -o -type l,f -print |
                         try grep -vxFf .spkg/userfiles > .spkg/pkgfiles
                 try find -- * -name .spkg -prune -o -type d -print > .spkg/reqdirs
                 try shopt -u dotglob

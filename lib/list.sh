@@ -66,7 +66,7 @@ list_pkgs() {
 	flags=( --- i-- -p- ip- --d i-d -pd ipd )
         for key in "${keys[@]}"; do
                 v="${all_pkgs[$key]}"
-		(( flag == ($v & $flag) )) && printf '%s  %s\n' "${flags[v]}" "$key"
+		(( flag == (v & flag) )) && printf '%s  %s\n' "${flags[v]}" "$key"
         done
 }
 

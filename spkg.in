@@ -18,7 +18,8 @@ version=SPKG_version
 
 # Must be process group leader or 'kill 0' 
 # will kill calling script
-if [[ $$ != "$(ps -o pgid -hp $$)" ]]; then
+# Can't call ps as may not be installed yet
+if [[ $$ != $(awk '{print $5}' /proc/$$/stat) ]]; then
    set -m
    $0 "$@"
    rc=$?
@@ -475,7 +476,7 @@ list_command() {
         done
         shift $(( OPTIND - 1 ))
 
-        all_types=( '' i p d ip d id pd ipd )
+        all_types=( '' i p ip d id pd ipd )
         types="${all_types[opt_installed + opt_packaged + opt_builddir]}"
         if (( $opt_archive )); then
                 list_archive_command "$types" "$@"
