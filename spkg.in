@@ -16,6 +16,16 @@ version=SPKG_version
 
 # Error handling
 
+# Must be process group leader or 'kill 0' 
+# will kill calling script
+if [[ $$ != "$(ps -o pgid -hp $$)" ]]; then
+   set -m
+   $0 "$@"
+   rc=$?
+   set +m
+   exit $rc
+fi
+
 set -E
 trap abort SIGTERM
 
@@ -227,7 +237,7 @@ latest_pkg() {
         fi
 }
 
-# Move <pkgspec> build and tar file to oldroot
+# Move <pkgspec> build and tar file to archiveroot
 archive_pkg() {
         local pkgspec=${1:?}
         local pkgbuilddir pkgtarfile
@@ -236,13 +246,13 @@ archive_pkg() {
         pkgtarfile="$pkgroot/$pkgspec-$pkgsuffix"
 
         if [[ -d "$pkgbuilddir" ]]; then
-                try rm -rf "$oldroot/build/$pkgspec"
-                trace mv -v "$pkgbuilddir" "$oldroot/build"
+                try rm -rf "$archiveroot/build/$pkgspec"
+                trace mv -v "$pkgbuilddir" "$archiveroot/build"
         fi
 
         if [[ -f "$pkgtarfile" ]]; then
-                try rm -f "$oldroot/pkg/$pkgspec-$pkgsuffix"
-                trace mv -v "$pkgtarfile" "$oldroot/pkg"
+                try rm -f "$archiveroot/pkg/$pkgspec-$pkgsuffix"
+                trace mv -v "$pkgtarfile" "$archiveroot/pkg"
         fi
 }
 
@@ -549,7 +559,7 @@ fi
 
 libroot=${sysroot}$libdir
 pkgroot=$libroot/pkg
-oldroot=$libroot/old
+archiveroot=$libroot/archive
 buildroot=$libroot/build
 buildfile=SPKGBUILD
 

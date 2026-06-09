@@ -120,18 +120,18 @@ init_spkgbuild() {
 }
 
 init_pkg_dirs() {
-        local builddir pkgdir olddir
+        local builddir pkgdir archivedir
 
         builddir="${with_sysroot}$libdir/build/$pkg-$version-$release"
         pkgdir="${with_sysroot}$libdir/pkg"
-        olddir="${with_sysroot}$libdir/old"
+        archivedir="${with_sysroot}$libdir/archive"
 
         mkdir -p "$builddir"
         init_spkgbuild
         cp SPKGBUILD $builddir
         mkdir -p "$pkgdir"
-        mkdir -p "$olddir/build"
-        mkdir -p "$olddir/pkg"
+        mkdir -p "$archivedir/build"
+        mkdir -p "$archivedir/pkg"
         mkdir -p "${with_sysroot}$installdir"
 }
 
