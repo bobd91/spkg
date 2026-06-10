@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 
+# Provide install destdir with a basic directory structure
+makelfs() {
+        local proot=$1
+        mkdir -pv $proot/{etc,var} $proot/usr/{bin,lib,sbin}
+
+        for i in bin lib sbin; do
+          ln -sv usr/$i $proot/$i
+        done
+
+        case $(uname -m) in
+          x86_64) mkdir -pv $proot/lib64 ;;
+        esac
+}
+
 build_pkg() {
         local pkg=$1
         local opt_check=$2
@@ -12,8 +26,8 @@ build_pkg() {
         local pkgdir=$builddir/pkg/$pkg
         local i src md5 link fn f url
         # declare variables that should be set by $buildfile
-        declare -a sources md5sums userfiles replaces
-        local pkgname pkgver pkgrel 
+        declare -a sources md5sums userfiles replaces tdir
+        local pkgname pkgver pkgrel
         # shellcheck disable=SC2034 # maybe defined in $buildfile
         local build check package 
         # shellcheck disable=SC2034 # maybe defined in $buildfile
@@ -41,6 +55,7 @@ build_pkg() {
                 try rm -rf src pkg
                 try mkdir src
                 try mkdir -p "pkg/$pkg"
+                makelfs "pkg/$pkg"
 
                 for i in "${!sources[@]}"; do
                         src=${sources[$i]}
@@ -72,6 +87,13 @@ build_pkg() {
                 done
 
                 try cd "$srcdir"
+
+                # If we have a single directory under source 
+                # then assume it is the usual case 
+                # where the first source file is a tar file
+                readarray -t -d '' tdir < <(find * -maxdepth 0 -type d -print0)
+                (( ${#tdir[@]} == 1 )) && try cd "${tdir[0]}"
+
                 call_fn build
                 if (( $opt_check )); then
                         call_fn check

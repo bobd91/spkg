@@ -314,14 +314,10 @@ recovery_required() {
 build_command() {
         require 'build'
 
-        local pkgspec=$1
+        local pkgspec
         local opt_check=0
         local opt_build_only=0
         local opt_package_only=0
-
-        parse_pkgspec "$pkgspec" || fail "invalid package spec $pkgspec"
-
-        log "[Command]" "spkg build $*"
 
         while getopts ":cbp" opt; do
                 case $opt in
@@ -332,6 +328,11 @@ build_command() {
                 esac
         done
         shift $(( OPTIND - 1 ))
+
+        pkgspec=$1
+        parse_pkgspec "$pkgspec" || fail "invalid package spec $pkgspec"
+
+        log "[Command]" "spkg build $*"
 
         (( ( $opt_build_only || $opt_check ) && $opt_package_only )) &&
                         fail "cannot use option -p with -b or -c"
