@@ -3,14 +3,14 @@
 # Provide install destdir with a basic directory structure
 makelfs() {
         local proot=$1
-        mkdir -pv $proot/{etc,var} $proot/usr/{bin,lib,sbin}
+        try mkdir -p $proot/{etc,var} $proot/usr/{bin,lib,sbin}
 
         for i in bin lib sbin; do
-          ln -sv usr/$i $proot/$i
+          try ln -s usr/$i $proot/$i
         done
 
-        case $(uname -m) in
-          x86_64) mkdir -pv $proot/lib64 ;;
+        case $(try uname -m) in
+          x86_64) try mkdir -p $proot/lib64 ;;
         esac
 }
 
@@ -55,7 +55,7 @@ build_pkg() {
                 try rm -rf src pkg
                 try mkdir src
                 try mkdir -p "pkg/$pkg"
-                makelfs "pkg/$pkg"
+                makelfs "$pkgdir"
 
                 for i in "${!sources[@]}"; do
                         src=${sources[$i]}
@@ -144,7 +144,8 @@ build_pkg() {
 
                 # turn on dotglob so we get ALL files and dirs
                 try shopt -s dotglob
-                try find -- * -name .spkg -prune -o -type l,f -print |
+                try find -- * -name .spkg -prune -o -xtype l -print > .spkg/brokenlinks
+                try find -- * -name .spkg -prune -o -xtype f -print |
                         try grep -vxFf .spkg/userfiles > .spkg/pkgfiles
                 try find -- * -name .spkg -prune -o -type d -print > .spkg/reqdirs
                 try shopt -u dotglob
@@ -152,6 +153,12 @@ build_pkg() {
                 try touch .spkg/pkgdirs
                 try printf '%s\n' "${replaces[@]}" > .spkg/replaces
                 try echo "$pkg" > .spkg/pkgspec
+                
+                if [[ -s .spkg/brokenlinks ]]; then
+                        fail 'package contains broken symlinks: see $PWD/.spkg/brokenlinks'
+                else
+                        try rm .spkg/brokenlinks
+                fi
 
                 try cd "$builddir"
 

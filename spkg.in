@@ -114,7 +114,7 @@ usage() {
 source_file() { 
         pushd . > /dev/null
         try source "$@"
-        popd > /dev/null
+        popd &> /dev/null
 }
 
 
@@ -566,7 +566,7 @@ buildroot=$libroot/build
 buildfile=SPKGBUILD
 
 logroot=${sysroot}$logdir
-requirepath="$(prefix_path "$requirepath")"
+[[ $prefix ]] && requirepath="$(prefix_path "$requirepath")"
 
 installroot=${sysroot}$installdir
 srcroot=${sysroot}$srccache

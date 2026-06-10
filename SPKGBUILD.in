@@ -9,8 +9,6 @@ sources=(SPKG_source)
 md5sums=(SPKG_md5)
 
 build() {
-        cd "$pkgname-$pkgver"
-
         ./configure \
                 --is-spkgbuild=yes \
                 --srccache="SPKG_srccache" \

@@ -10,7 +10,7 @@ check_install_permissions() {
         shift
         while read -r file; do
                 sysfile="$sysroot/${file#*/}"
-                [[ -h $sysfile ]] || continue
+                [[ -h $sysfile && -f $sysfile ]] || continue
                 dir="${sysfile%/*}"
                 [[ -d $dir ]] || continue
                 [[ -w $dir ]] || fail "no write permission to $dir"
@@ -45,7 +45,7 @@ check_uninstall_permissions() {
 
         while read -r -d '' file; do
                 linkfile="$sysroot/$file"
-                [[ -h $linkfile ]] || continue
+                [[ -h $linkfile && -f $sysfile ]] || continue
                 dir="${sysfile%/*}"
                 [[ -d $dir ]] || continue
                 [[ -w $dir ]] || fail "no write permission to $dir"
