@@ -94,6 +94,8 @@ apply_options() {
                 -DSPKG_with_sysroot="$with_sysroot" \
                 -DSPKG_prefix="$prefix" \
                 -DSPKG_version="$version" \
+                -DSPKG_srccache="$srccache" \
+                -DSPKG_installdir="$installdir" \
                 spkg.in > spkg
 
         m4 \
@@ -146,7 +148,7 @@ get_src_md5() {
 }
 
 pkg=spkg
-version=0.1.14
+version=0.2.1
 release=1
 
 is_spkgbuild=no
@@ -156,7 +158,7 @@ exec_prefix=/usr/bin
 with_sysroot=
 
 libdir=/var/lib/spkg
-installdir=/spkg
+installdir=/usr/pkg
 srccache=/sources
 
 srcfile=

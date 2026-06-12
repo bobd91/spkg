@@ -2,9 +2,7 @@
 # Configuration file
 
 # Where source tarballs are stored
-# srccache=/sources
-srccache="SPKG_srccache"
+# srccache="SPKG_srccache"
 
 # Where packages are installed
-# installdir=/spkg
-installdir="SPKG_installdir"
+# installdir="SPKG_installdir"

@@ -13,6 +13,8 @@
 sysroot=SPKG_with_sysroot
 prefix=SPKG_prefix
 version=SPKG_version
+srccache=SPKG_srccache
+installdir=SPKG_installdir
 
 # Error handling
 
@@ -68,6 +70,15 @@ fail() {
 # Try to run something, die if it fails
 try() {
         "$@" || die $? 1 "$@"
+}
+
+# grep returns 1 if it doesn't find anything 
+# which in many case shouldn't be treated as an error
+trygrep() {
+        grep "$@"
+        local rc=$?
+        (( $rc > 1 )) && die $rc 1 "grep" "$@"
+        return $rc
 }
 
 # Try and trace output
@@ -551,8 +562,6 @@ exec {stderrfd}>&2
 libdir=/var/lib/spkg
 logdir=/var/log/spkg
 requirepath=/usr/share/spkg/lib
-installdir=/spkg
-srccache=/sources
 pkgsuffix="x86_64.spkg.tar.gz"
 
 if [[ -f "$prefix/etc/spkg.conf" ]]; then

@@ -30,8 +30,6 @@ build_pkg() {
         local pkgname pkgver pkgrel
         # shellcheck disable=SC2034 # maybe defined in $buildfile
         local build check package 
-        # shellcheck disable=SC2034 # maybe defined in $buildfile
-        local pre_install post_install pre_uninstall post_uninstall
 
 
         [[ ! -f $pkgfile ]] || fail "package already exists $pkgfile"
@@ -43,6 +41,8 @@ build_pkg() {
         # defaults, can be added to or overridden by $buildfile
         local userfiles=("/etc/*")
         local replaces=("${pkg%-*-*}")
+
+        unset -f pre_install post_install pre_uninstall post_uninstall
 
         source_file "$buildfile"
 
@@ -121,13 +121,7 @@ build_pkg() {
                         fi
                 done < <(try find "$pkgdir" -type l -print0)
 
-                # Try and spot other references to spkg directories
-                # Except spkg package of course!
-                if [[ $pkgname != 'spkg' ]] && grep -r "$libdir" > /dev/null; then
-                        warn "some package files contain references to ${libdir:1}"
-                fi
-
-                try mkdir .spkg
+                try mkdir -p .spkg
 
                 {
                         for fn in pre_install post_install pre_uninstall post_uninstall; do
@@ -146,7 +140,7 @@ build_pkg() {
                 try shopt -s dotglob
                 try find -- * -name .spkg -prune -o -xtype l -print > .spkg/brokenlinks
                 try find -- * -name .spkg -prune -o -xtype f -print |
-                        try grep -vxFf .spkg/userfiles > .spkg/pkgfiles
+                        trygrep -vxFf .spkg/userfiles > .spkg/pkgfiles
                 try find -- * -name .spkg -prune -o -type d -print > .spkg/reqdirs
                 try shopt -u dotglob
                 

@@ -299,7 +299,12 @@ install() {
 post_install() {
         declare -g pkgdir ipkgdir upkgdirs 
 
-        # Run package supplied post_install function
+        # upkgdirs[0] may have been modified in install 
+        # but if restarting at post then this change will have been missed
+        if [[ $pkgdir == "${upkgdirs[0]}" ]]; then
+                upkgdirs[0]=".c_$pkgdir"
+        fi
+
         post_install_pkg "$pkgdir" "${upkgdirs[@]}"
 
         # Remove replaced packages, run post_uninstall functions
@@ -380,7 +385,7 @@ recover_pkg_command() {
         if [[ $rpkgdir == $ipkgdir ]];then
                 install_or_recover_pkg 'install' "${log[@]}"
         else
-                install_or_rcover_pkg 'post' "${log[@]}"
+                install_or_recover_pkg 'post' "${log[@]}"
         fi
 }
 
