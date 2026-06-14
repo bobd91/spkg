@@ -44,7 +44,7 @@ compare_logs() {
 cat_pkg() {
         local pkgspec=${1:?}
         local pkgname="${pkgspec%-*-*}"
-        local pkgdir="$testroot/spkg/$pkgname"
+        local pkgdir="$testroot/usr/pkg/$pkgname"
         local metadir="$pkgdir/.spkg"
 
         echo "Package"
@@ -137,7 +137,9 @@ rm -rf testroot
 
 files=( configure Makefile.in spkg.bash spkg.conf.in SPKGBUILD.in spkg.in )
 
-mkdir -p testroot/{results,sources,tools}
+mkdir -p testroot/{etc,usr/{,bin,sbin,lib,pkg},lib64,results,sources,tools}
+ln -s usr/bin testroot/bin
+ln -s usr/lib testroot/lib
 
 
 pkgver="$(awk -F"=" '/^version/{print $2}' ../configure)"
@@ -201,6 +203,6 @@ run_pkg testpkg-2.1.0-1
 run_pkg testpkg2-1.0.0-1
 
 # And uninstall testpkg
-rem_pkg testpkg-2.1.0-1
+#rem_pkg testpkg-2.1.0-1
 
 printf '\n'

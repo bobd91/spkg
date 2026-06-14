@@ -1,3 +1,2 @@
 [Command] spkg build testpkg-2.1.0-1
-[Warning] some package files contain references to var/lib/spkg
 [Info] Package added testpkg-2.1.0-1

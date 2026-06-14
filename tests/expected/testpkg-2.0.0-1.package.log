@@ -10,19 +10,18 @@ Files
 
 Required Dirs
 etc
+lib64
 usr
 usr/share
 usr/share/lib1
 usr/bin
 usr/lib
+usr/sbin
+var
 
 Package Dirs
-etc
-usr
-usr/bin
 usr/share
 usr/share/lib1
-usr/lib
 
 Upgrade Functions
 

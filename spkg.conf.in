@@ -1,8 +1,8 @@
 # Simple Package Manager
 # Configuration file
-
+changecom
 # Where source tarballs are stored
-# srccache="SPKG_srccache"
+# srccache=SPKG_srccache
 
 # Where packages are installed
-# installdir="SPKG_installdir"
+# installdir=SPKG_installdir

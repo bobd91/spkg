@@ -10,7 +10,7 @@ check_install_permissions() {
         shift
         while read -r file; do
                 sysfile="$sysroot/${file#*/}"
-                [[ -h $sysfile && -f $sysfile ]] || continue
+                [[ -h $sysfile && ! -d $sysfile ]] || continue
                 dir="${sysfile%/*}"
                 [[ -d $dir ]] || continue
                 [[ -w $dir ]] || fail "no write permission to $dir"
@@ -45,12 +45,12 @@ check_uninstall_permissions() {
 
         while read -r -d '' file; do
                 linkfile="$sysroot/$file"
-                [[ -h $linkfile && -f $sysfile ]] || continue
+                [[ -h $linkfile && ! -d $sysfile ]] || continue
                 dir="${sysfile%/*}"
                 [[ -d $dir ]] || continue
                 [[ -w $dir ]] || fail "no write permission to $dir"
                 link="$(try readlink "$linkfile")"
                 [[ $link =~ ^$installdir/$upkgname ]] ||
                         fail "uninstall file is not owned by this package: $linkfile"
-        done < <(try find "$installroot/$upkgname" -name .spkg -prune -o -type l,f -printf '%P\0')
+        done < <(try find "$installroot/$upkgname" -name .spkg -prune -o -xtype f -printf '%P\0')
 }

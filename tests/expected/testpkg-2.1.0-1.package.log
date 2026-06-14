@@ -11,21 +11,20 @@ A reference back to spkg /var/lib/spkg
 
 Required Dirs
 etc
+lib64
 usr
 usr/share
 usr/share/lib1
 usr/share/secret
 usr/bin
 usr/lib
+usr/sbin
+var
 
 Package Dirs
 usr/share/secret
-etc
-usr
-usr/bin
 usr/share
 usr/share/lib1
-usr/lib
 
 Upgrade Functions
 pre_install () 

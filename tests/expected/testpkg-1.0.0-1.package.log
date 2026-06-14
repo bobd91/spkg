@@ -7,13 +7,14 @@ Files
 
 Required Dirs
 etc
+lib64
 usr
 usr/bin
+usr/lib
+usr/sbin
+var
 
 Package Dirs
-etc
-usr
-usr/bin
 
 Upgrade Functions
 
